@@ -1,0 +1,11 @@
+version: "3.8"
+
+services:
+  recorder:
+    build: .
+    container_name: church-recorder
+    restart: always
+    volumes:
+      - ./recordings:/app/recordings
+    env_file:
+      - .env
