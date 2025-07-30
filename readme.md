@@ -1,5 +1,8 @@
 
-# <img src="appicon.png" alt="App Icon" width="128" style="vertical-align:middle; margin-right:8px; border-radius:23px;"/> ByteWorship Recorder
+<p align="center">
+  <img src="appicon.png" alt="App Icon" width="128" style="border-radius:23px;">
+</p>
+<h1 align="center">ByteWorship Recorder</h1>
 
 A python program that can record listentochurch icecast streams to an mp3 file. You can install it using docker on a Debian linux machine.
 
