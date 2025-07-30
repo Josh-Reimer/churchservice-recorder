@@ -13,6 +13,21 @@ I'd like to extract Sunday morning announcements out of transcribed church servi
 ```
 docker compose up -d --build
 ```
+
+## APIs used and keys required
+This app makes use of telegram for recording updates, and OpenAI whisper for text transcribing. The app will run without the text transcription but you will need a telegram bot api key. 
+
+All of the secrets in this program will need to be stored in a .env file. You can create one like this: 
+
+```
+cat <<EOF > .env
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+OPENAI_API_KEY=your_openai_api_key_here
+STREAM_URL=your_icecast_stream_url_here
+EOF
+```
+
+
 ## Where to get the stream urls
 You can find the urls here: [listentochurch.com](https://www.listentochurch.com/). You will need to look in the browser dev tools and guess the congregations names as I will not provide those names here.
 
