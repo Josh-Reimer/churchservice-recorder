@@ -8,6 +8,7 @@ A python program that can record listentochurch icecast streams to an mp3 file. 
 
 ## Goals
 I'd like to extract Sunday morning announcements out of transcribed church services. Perhaps a flask webapp or mobile PWA to view them.
+Also, I would like to record the song numbers we sing and put it on a graph. I have a Christian hymnal pdf that I think I could do something with.
 ## build docker container
 
 ```
