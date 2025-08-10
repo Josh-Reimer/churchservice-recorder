@@ -2,7 +2,9 @@ import subprocess
 import sys
 import signal
 import os
+from dotenv import load_dotenv
 
+load_dotenv()
 STREAM_URL = os.getenv("STREAM_URL")
 #STREAM_URL = "https://dublab.out.airtime.pro/dublab_a"
 OUTPUT_FILE = "thefile.mp3"
