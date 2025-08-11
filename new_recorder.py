@@ -9,21 +9,36 @@ import tzlocal
 import pytz
 
 load_dotenv()
-LOCAL_TZ = pytz.timezone("your timezone here")  # Replace with your actual timezone
-os.environ["TZ"] = "your timezone here"
+TIMEZONE = os.getenv("TIMEZONE")
+LOCAL_TZ = pytz.timezone(TIMEZONE)  # Replace with your actual timezone
+os.environ["TZ"] = f"{TIMEZONE}"  # Set your timezone here
 time.tzset()
 #STREAM_URL = "http://localhost:8000/dublab"
 STREAM_URL = os.getenv("STREAM_URL")
+STREAM_STATUS_URL = os.getenv("STREAM_STATUS_URL")
 CHECK_INTERVAL = 30  # seconds
 OUTPUT_DIR = "./recordings"
 
 def stream_available():
-    """Check if the Icecast stream is available."""
+    """Check stream status from external API and print status."""
+    url = STREAM_STATUS_URL
     try:
-        r = requests.get(STREAM_URL, stream=True, timeout=5)
-        return r.status_code == 200
-    except requests.RequestException:
-        return False
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        if data.get("full") == 1:
+            print("This system is full.")
+        elif not data.get("autoscale") and data.get("percentage", 0) > 74:
+            print(f"This system is {round(data.get('percentage', 0))}% full.")
+            print(f"Status message: {data.get('message')}")
+        if data.get("status") == 1:
+            print("Stream is online.")
+            return True
+        else:
+            print("Stream is offline.")
+            return False
+    except requests.RequestException as e:
+        print(f"Error checking stream status: {e}")
 
 def record_stream():
     """Record the stream until it becomes unavailable."""
