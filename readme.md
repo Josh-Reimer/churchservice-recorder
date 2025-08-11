@@ -25,6 +25,8 @@ cat <<EOF > .env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 OPENAI_API_KEY=your_openai_api_key_here
 STREAM_URL=your_icecast_stream_url_here
+STREAM_STATUS_URL=your_stream_status_url_here
+TIMEZONE=your_timezone_here
 EOF
 ```
 
