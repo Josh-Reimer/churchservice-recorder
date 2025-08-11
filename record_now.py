@@ -5,8 +5,9 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-STREAM_URL = os.getenv("STREAM_URL")
+#STREAM_URL = os.getenv("STREAM_URL")
 #STREAM_URL = "https://dublab.out.airtime.pro/dublab_a"
+STREAM_URL = "http://localhost:8000/dublab"  # my local test stream
 OUTPUT_FILE = "thefile.mp3"
 
 def record(duration=None):
