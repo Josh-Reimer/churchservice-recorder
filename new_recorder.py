@@ -35,11 +35,9 @@ def stream_available():
             print(f"Status message: {data.get('message')}")
         if data.get("status") == 1:
             print("Stream is online.")
-            send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Stream is online.")
             return True
         else:
             print("Stream is offline.")
-            send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Stream is offline.")
             return False
     except requests.RequestException as e:
         print(f"Error checking stream status: {e}")
