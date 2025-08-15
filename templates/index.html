@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ByteWorship Recordings</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      background-color: #051408; /* Darker green base */
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      overflow-x: hidden;
+    }
+
+    /* Static patterned background */
+    .background-pattern {
+      position: fixed;
+      inset: 0;
+      z-index: -3;
+      background-image:
+        url("data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGZpbHRlciBpZD0ibm9pc2UiPjxmZVR1cmJ1bGVuY2UgdHlwZT0iZnJhY3RhbE5vaXNlIiBiYXNlRnJlcXVlbmN5PSIxLjIiIG51bU9jdGF2ZXM9IjQiLz48L2ZpbHRlcj48cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgaWQ9InIiIGZpbHRlcj0idXJsKCNub2lzZSkiLz48L3N2Zz4=");
+      background-size: 100px 100px;
+      background-repeat: repeat;
+      background-blend-mode: overlay;
+    }
+
+    /* Canvas grain overlays */
+    #grainCanvas1, #grainCanvas2 {
+      position: fixed;
+      inset: 0;
+      z-index: -2;
+      pointer-events: none;
+    }
+    #grainCanvas2 {
+      z-index: -1;
+    }
+  </style>
+</head>
+<body class="text-white p-6">
+  <!-- Background layers -->
+  <div class="background-pattern"></div>
+  <canvas id="grainCanvas1"></canvas>
+  <canvas id="grainCanvas2"></canvas>
+
+  <!-- App Icon Section -->
+  <div class="flex justify-center mb-10 " style="text-align: center;">
+    <img 
+      src="appicon.png" 
+      alt="App Icon" 
+      class="w-32 h-32 rounded-2xl shadow-lg object-cover" 
+      style="border-radius:26px;"
+    />
+  </div>
+
+  <!-- Title -->
+  <h1 class="text-3xl text-center font-bold mb-6">ByteWorship Recordings</h1>
+
+  <!-- Recordings List -->
+  <div class="max-w-3xl mx-auto space-y-6">
+   
+{% for file in files %}
+    <div class="bg-white/10 backdrop-blur-sm p-4 rounded-xl shadow-lg">
+      <h2 class="text-xl font-semibold mb-2">{{ file }}</h2>
+      <audio controls class="w-full mb-2">
+        <source src="{{ url_for('serve_recording', filename=file) }}" type="audio/mpeg" />
+        Your browser does not support the audio element.
+      </audio>
+      <div class="text-sm text-green-300">Length: 55:02</div>
+    </div>
+{% endfor %}
+  </div>
+
+  <script>
+    function setupGrain(canvas, speedX, speedY, alpha, greenStrength) {
+      const ctx = canvas.getContext("2d");
+      function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      }
+      window.addEventListener("resize", resize);
+      resize();
+
+      let frame = 0;
+      function draw() {
+        const w = canvas.width;
+        const h = canvas.height;
+        const imageData = ctx.createImageData(w, h);
+        const buffer = imageData.data;
+
+        for (let i = 0; i < buffer.length; i += 4) {
+          const val = Math.random() * 255;
+          buffer[i]     = val * 0.05;        // Red (very low)
+          buffer[i + 1] = val * greenStrength; // Green main tone
+          buffer[i + 2] = val * 0.05;        // Blue (very low)
+          buffer[i + 3] = alpha;             // Transparency
+        }
+
+        const offsetX = Math.sin(frame / 7) * speedX;
+        const offsetY = Math.cos(frame / 11) * speedY;
+        ctx.putImageData(imageData, offsetX, offsetY);
+        frame++;
+        requestAnimationFrame(draw);
+      }
+      draw();
+    }
+
+    // Layer 1: smaller jitter, higher opacity
+    setupGrain(document.getElementById("grainCanvas1"), 0.5, 0.1, 55, 1);
+
+    // Layer 2: bigger jitter, lower opacity
+    setupGrain(document.getElementById("grainCanvas2"), 30, 2.3, 25, 0.9);
+  </script>
+  <footer class="text-center mt-10 text-sm text-gray-400">
+    &copy; 2025 ByteWorship. All rights reserved.
+  </footer>
+  <a href="{{ url_for('logout') }}" class="block text-center mt-4 text-blue-400 hover:underline">
+    Logout
+  </a>
+</body>
+</html>
