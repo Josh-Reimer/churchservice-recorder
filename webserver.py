@@ -1,5 +1,8 @@
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, abort
 import os
+import mutagen
+from mutagen.mp3 import MP3
+from audio_length import audio_duration
 
 app = Flask(__name__)
 app.secret_key = "replace_with_secure_secret_key"  # Needed for sessions
@@ -9,6 +12,23 @@ USERNAME = "admin"
 PASSWORD = "password"
 
 RECORDINGS_FOLDER = os.path.join(os.getcwd(), "recordings-archive")
+
+def get_audio_lengths(files):
+    """
+    Get lengths of audio files in seconds.
+    
+    :param files: List of audio file names.
+    :return: Dictionary with file names as keys and lengths in seconds as values.
+    """
+    lengths = {}
+    for file in files:
+        file_path = os.path.join(RECORDINGS_FOLDER, file)
+        if os.path.exists(file_path):
+            audio = MP3(file_path)
+            lengths[file] = f"{int(audio.info.length // 3600)}:{int((audio.info.length % 3600) // 60)}:{int(audio.info.length % 60)}"
+        else:
+            lengths[file] = None
+    return lengths
 
 @app.route("/", methods=["GET", "POST"])
 def login():
@@ -27,7 +47,9 @@ def index():
         return redirect(url_for("login"))
 
     files = [f for f in os.listdir(RECORDINGS_FOLDER) if f.lower().endswith(".mp3")]
-    return render_template("index.html", files=files)
+    
+
+    return render_template("index.html", files=files, audio_lengths=get_audio_lengths(files))
 
 @app.route("/recordings/<filename>")
 def serve_recording(filename):

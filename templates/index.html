@@ -66,7 +66,7 @@
         <source src="{{ url_for('serve_recording', filename=file) }}" type="audio/mpeg" />
         Your browser does not support the audio element.
       </audio>
-      <div class="text-sm text-green-300">Length: 55:02</div>
+      <div class="text-sm text-green-300">Length: {{ audio_lengths[file]}}</div>
     </div>
 {% endfor %}
   </div>
