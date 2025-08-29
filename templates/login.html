@@ -1,60 +1,63 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" href="appicon.png" type="image/png" />
-    <title>ByteWorship Recordings - Login</title>
-    <meta charset="UTF-8">
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #1f1818;
-            color: #c2a5a5;
-            margin: 0;
-            padding: 20px;
-        }
-        h1 {
-            color: #444;
-        }
-        form {
-            background-color: #3d3232;
-            padding: 20px;
-            border-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        label {
-            display: block;
-            margin-bottom: 10px;
-        }
-        input[type="text"],
-        input[type="password"] {
-            width: 100%;
-            padding: 8px;
-            margin-top: 5px;
-            box-sizing: border-box;
-            background-color: #1f1818;
-            color: #c2a5a5;
-        }
-        button {
-            padding: 10px 15px;
-            background-color: #28a745;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #218838;
-        }
-    </style>
-    <title>Login</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in</title>
+  <link rel="icon" href="{{ url_for('serve_icon') }}">
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #10291a; color: #e6f9e8; }
+    .wrap { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
+    form { background: #183c26; padding: 24px; border-radius: 16px; width: 100%; max-width: 360px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+    h1 { margin: 0 0 16px; font-size: 20px; }
+    label { display: block; margin: 12px 0 6px; font-size: 12px; opacity: .8; }
+    input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #295c3a; background: #153221; color: #e6f9e8; }
+    button { width: 100%; margin-top: 16px; padding: 10px 12px; border: 0; border-radius: 10px; background: #3ecf4a; color: white; font-weight: 600; cursor: pointer; }
+    .flash { margin-bottom: 10px; padding: 10px 12px; border-radius: 10px; }
+    .flash.error { background: #2a3a1a; color: #ffeaea; border: 1px solid #7a8a21; }
+    .flash.success { background: #163a1f; color: #c8ffd7; border: 1px solid #1c7a3a; }
+     .wrap {
+    display: flex;
+    justify-content: center; /* horizontal center */
+    align-items: center;     /* vertical center if you set a height */
+    flex-direction: column;
+    min-height: 100vh;       /* optional, centers in viewport */
+  }
+
+  form {
+    display: flex;
+    flex-direction: column;
+    align-items: center;     /* center inputs inside form */
+    gap: 10px;               /* optional spacing between inputs */
+  }
+
+  input {
+    text-align: center;      /* optional: centers text inside inputs */
+  }
+  </style>
 </head>
 <body>
-    <h1>Please Login</h1>
-    <form method="post">
-        <label>Username: <input type="text" name="username"></label><br>
-        <label>Password: <input type="password" name="password"></label><br>
-        <button type="submit">Login</button>
+  <div class="wrap">
+    <form method="post" action="{{ url_for('login') }}" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
+      <h1>Sign in</h1>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, msg in messages %}
+            <div class="flash {{ category }}">{{ msg }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" required>
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required>
+
+      <button type="submit">Log in</button>
     </form>
+  </div>
 </body>
 </html>

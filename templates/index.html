@@ -115,8 +115,10 @@
   <footer class="text-center mt-10 text-sm text-gray-400">
     &copy; 2025 ByteWorship. All rights reserved.
   </footer>
-  <a href="{{ url_for('logout') }}" class="block text-center mt-4 text-blue-400 hover:underline">
-    Logout
-  </a>
+  <div class="logout-btn">
+      <button class="fixed bottom-4 right-4 bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition duration-300 ease-in-out">
+            <a href="{{ url_for('logout') }}">Logout</a>
+            </button>
+        </div>
 </body>
 </html>
