@@ -96,7 +96,7 @@ def send_telegram_file(bot_token: str, chat_id: str, file_path: str, caption: st
         return {"ok": False, "error": str(e)}
 
 
-def record_stream():
+def record_stream(service_type):
     """Record the stream until it becomes unavailable."""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     output_file = f"{OUTPUT_DIR}/recording_{timestamp}.mp3"
@@ -123,18 +123,36 @@ def record_stream():
 
     print(f"[{datetime.now()}] Stream stopped. Ending recording.")
     send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
+
+    if service_type == "sunday_morning":    # After the Sunday morning recording ends, start checking for stream again because i guess they pause the stream for sunday school
+        send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Sunday morning recording finished. Starting next recording after sunday school")
+        while not stream_available():
+            print(f"[{datetime.now()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
+            time.sleep(CHECK_INTERVAL)
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        output_file = f"{OUTPUT_DIR}/recording_{timestamp}.mp3"
+        # Run ffmpeg until the stream drops
+        process = subprocess.Popen([
+            "ffmpeg", "-y",
+            "-i", STREAM_URL,
+            "-c", "copy",
+            output_file
+        ])
+        while stream_available():
+            time.sleep(CHECK_INTERVAL)
+        print(f"[{datetime.now()}] Stream stopped. Ending recording.")
+        send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
+
     process.terminate()
     process.wait()
 
 def schedule_recordings():
     """Schedule Sunday recordings at 10:00 and 18:00."""
-    schedule.every().sunday.at("10:00").do(record_stream)
-    schedule.every().sunday.at("18:00").do(record_stream)
-    schedule.every().monday.at("17:00").do(record_stream)
-    schedule.every().tuesday.at("17:00").do(record_stream)
-    schedule.every().wednesday.at("17:00").do(record_stream)
-    schedule.every().thursday.at("17:00").do(record_stream)
+    schedule.every().sunday.at("10:00").do(record_stream,"sunday_morning")
    
+    schedule.every().sunday.at("18:30").do(record_stream,"sunday_evening")
+    schedule.every().tuesday.at("19:00").do(record_stream,"tuesday_youth_evening")
+    print(schedule.get_jobs())
 
 
     print(f"[{datetime.now()}] Scheduler started. Waiting for recording times...")
