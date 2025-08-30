@@ -15,6 +15,11 @@ Also, I would like to record the song numbers we sing and put it on a graph. I h
 docker compose up -d --build
 ```
 
+## Start the web interface for viewing recordings
+
+The flask web interface is not enabled in the docker container yet, so if you install the project without building the docker container, you can run the command ```python3 webserver.py``` in the same folder as the rest of the code. Note that you may have to run ```python3 -m venv venv && source venv/bin/activate``` first to enable a virtual environment.
+
+
 ## APIs used and keys required
 This app makes use of telegram for recording updates, and OpenAI whisper for text transcribing. The app will run without the text transcription but you will need a telegram bot api key. 
 
