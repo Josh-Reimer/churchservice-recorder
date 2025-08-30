@@ -64,7 +64,7 @@ def index():
             with open(txt_path, "r", encoding="utf-8") as t:
                 transcriptions[f] = t.read()
         else:
-            transcriptions[f] = None
+            transcriptions[f] = "Transcription not available yet."
     return render_template("index.html", files=files, audio_lengths=get_audio_lengths(files), transcriptions=transcriptions)
 
 @app.route("/recordings/<filename>")
