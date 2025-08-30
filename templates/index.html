@@ -7,6 +7,41 @@
   <title>ByteWorship Recordings</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
+    @media (prefers-color-scheme: dark) {
+      body {
+      background-color: #051408;
+      color: #fff;
+      }
+      .bg-white\/10 {
+      background-color: rgba(255,255,255,0.08) !important;
+      }
+      audio {
+      background: transparent;
+      color-scheme: dark;
+      border-radius: 0.5rem;
+      width: 100%;
+      }
+    }
+    @media (prefers-color-scheme: light) {
+      body {
+        background-color: #e7f5e7;
+        color: #1a2e1a;
+      }
+      .bg-white\/10 {
+        background-color: rgba(0,0,0,0.06) !important;
+      }
+      audio {
+        background: #f3fdf3;
+        color-scheme: light;
+        border-radius: 0.5rem;
+        width: 100%;
+      }
+    }
+    audio {
+      outline: none;
+      box-shadow: 0 2px 8px 0 rgba(0,0,0,0.08);
+      margin-bottom: 0.5rem;
+    }
     body {
       background-color: #051408; /* Darker green base */
       font-family: 'Segoe UI', sans-serif;
