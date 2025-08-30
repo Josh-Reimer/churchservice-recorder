@@ -2,10 +2,54 @@ version: "3.8"
 
 services:
   recorder:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: church-recorder
-    restart: always
+    restart: unless-stopped
+    
+    # Environment variables (DO NOT use env_file for secrets in production)
+    environment:
+      - TZ=${TZ:-UTC}
+      - PYTHONPATH=/app
+      # Pass secrets via environment variables instead of .env file
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TIMEZONE=${TIMEZONE:-UTC}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Add other environment variables as needed
+    
+    # Volumes for persistent data
     volumes:
-      - ./recordings:/app/recordings
-    env_file:
-      - .env
+      - ./recordings:/app/recordings:rw
+      - ./transcriptions:/app/transcriptions:rw
+      - /etc/localtime:/etc/localtime:ro  # Sync timezone with host
+    
+    # Network configuration
+    networks:
+      - recorder-network
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  recorder-network:
+    driver: bridge
+
+# Optional: Add volumes for better data management
+volumes:
+  recordings-data:
+  transcriptions-data:

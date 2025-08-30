@@ -12,30 +12,29 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Create a non-root user for security
+RUN useradd --create-home --shell /bin/bash app \
+    && chown -R app:app /app
+USER app
+
+# Copy requirements file first (for better Docker layer caching)
+COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir \
-    python-telegram-bot==20.7 \
-    python-dotenv \
-    aiohttp \
-    schedule \
-    requests \
-    tzlocal \
-    pytz
+RUN pip install --user --no-cache-dir -r requirements.txt
 
-# Copy project files into the container
-COPY new_recorder.py .
-COPY .env .
-# Get timezone from host system during build
-RUN TZ=$(cat /etc/timezone 2>/dev/null || readlink /etc/localtime | sed 's|.*/zoneinfo/||' || echo "UTC") && \
-    echo "Detected timezone: $TZ" && \
-    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
-    echo $TZ > /etc/timezone && \
-    export TZ=$TZ
+# Copy application code
+COPY --chown=app:app new_recorder.py .
 
-ENV TZ=${TZ:-UTC}
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+# Create directories for recordings and transcriptions
+RUN mkdir -p /app/recordings /app/transcriptions
 
-# Default command to run the app
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8099/health', timeout=5)" || exit 1
+
+# Default command
 CMD ["python", "new_recorder.py"]

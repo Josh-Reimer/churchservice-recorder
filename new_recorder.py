@@ -18,6 +18,7 @@ STREAM_URL = os.getenv("STREAM_URL")
 STREAM_STATUS_URL = os.getenv("STREAM_STATUS_URL")
 CHECK_INTERVAL = 30  # seconds
 OUTPUT_DIR = "./recordings"
+TRANSCRIPTIONS_DIR = "./transcriptions"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
@@ -123,6 +124,7 @@ def record_stream(service_type):
 
     print(f"[{datetime.now()}] Stream stopped. Ending recording.")
     send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
+    transcribe_audio(output_file)
 
     if service_type == "sunday_morning":    # After the Sunday morning recording ends, start checking for stream again because i guess they pause the stream for sunday school
         send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Sunday morning recording finished. Starting next recording after sunday school")
@@ -142,9 +144,21 @@ def record_stream(service_type):
             time.sleep(CHECK_INTERVAL)
         print(f"[{datetime.now()}] Stream stopped. Ending recording.")
         send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
+        transcribe_audio(output_file)
 
     process.terminate()
     process.wait()
+
+def transcribe_audio(file_path):
+    import whisper
+
+    model = whisper.load_model("large")  # Change to "tiny", "small", "medium", or "large" as needed
+    result = model.transcribe(file_path)
+    print(result["text"])
+    transciption_text_file = os.path.join(TRANSCRIPTIONS_DIR, os.path.basename(file_path).replace(".mp3", ".txt"))
+    with open(transciption_text_file, "w", encoding="utf-8") as f:
+        f.write(result["text"])
+    send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, transciption_text_file, caption=f"Transcription finished: {transciption_text_file}")
 
 def schedule_recordings():
     """Schedule Sunday recordings at 10:00 and 18:00."""
