@@ -99,10 +99,16 @@
     <div class="bg-white/10 backdrop-blur-sm p-4 rounded-xl shadow-lg">
       <h2 class="text-xl font-semibold mb-2">{{ file }}</h2>
       <audio controls class="w-full mb-2">
-        <source src="{{ url_for('serve_recording', filename=file) }}" type="audio/mpeg" />
-        Your browser does not support the audio element.
+      <source src="{{ url_for('serve_recording', filename=file) }}" type="audio/mpeg" />
+      Your browser does not support the audio element.
       </audio>
-      <div class="text-sm text-green-300">Length: {{ audio_lengths[file]}}</div>
+      <div class="text-sm text-green-300 mb-2">Length: {{ audio_lengths[file]}}</div>
+      <details class="mt-2">
+      <summary class="cursor-pointer text-green-200 hover:underline">Show Transcription</summary>
+      <div class="mt-2 whitespace-pre-line text-green-100 text-sm">
+        {{ transcriptions[file] }}
+      </div>
+      </details>
     </div>
 {% endfor %}
   </div>

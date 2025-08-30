@@ -15,6 +15,7 @@ USERNAME = "admin"
 PASSWORD = "42"
 
 RECORDINGS_FOLDER = os.path.join(os.getcwd(), "recordings-archive")
+TRANSCRIPTIONS_FOLDER = os.path.join(os.getcwd(), "recordings-archive/transcriptions")
 
 def get_audio_lengths(files):
     """
@@ -54,8 +55,17 @@ def index():
         return redirect(url_for("login"))
 
     files = [f for f in os.listdir(RECORDINGS_FOLDER) if f.lower().endswith(".mp3")]
-    
-    return render_template("index.html", files=files, audio_lengths=get_audio_lengths(files))
+    transcriptions = {}
+    for f in files:
+        txt_file = os.path.splitext(f)[0] + ".txt"
+        txt_path = os.path.join(TRANSCRIPTIONS_FOLDER, txt_file)
+        print(txt_path)
+        if os.path.exists(txt_path):
+            with open(txt_path, "r", encoding="utf-8") as t:
+                transcriptions[f] = t.read()
+        else:
+            transcriptions[f] = None
+    return render_template("index.html", files=files, audio_lengths=get_audio_lengths(files), transcriptions=transcriptions)
 
 @app.route("/recordings/<filename>")
 def serve_recording(filename):
