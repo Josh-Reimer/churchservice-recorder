@@ -18,6 +18,8 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TIMEZONE=${TIMEZONE:-UTC}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - STREAM_URL=${STREAM_URL}
+      - STREAM_STATUS_URL=${STREAM_STATUS_URL}
       # Add other environment variables as needed
     
     # Volumes for persistent data

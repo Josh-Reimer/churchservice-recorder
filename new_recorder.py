@@ -168,6 +168,9 @@ def schedule_recordings():
     schedule.every().tuesday.at("19:00").do(record_stream,"tuesday_youth_evening")
     print(schedule.get_jobs())
 
+    print(STREAM_STATUS_URL)
+    print(f"Using timezone: {TIMEZONE}")
+    print(STREAM_URL)
 
     print(f"[{datetime.now()}] Scheduler started. Waiting for recording times...")
     while True:
