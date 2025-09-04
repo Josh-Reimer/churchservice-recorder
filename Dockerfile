@@ -20,6 +20,8 @@ RUN useradd --create-home --shell /bin/bash app \
     && chown -R app:app /app
 USER app
 
+COPY models models
+
 # Copy requirements file first (for better Docker layer caching)
 COPY requirements.txt .
 
