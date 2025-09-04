@@ -7,6 +7,28 @@ from dotenv import load_dotenv
 import os
 import tzlocal
 import pytz
+import logging
+from logging.handlers import TimedRotatingFileHandler
+
+# Create timed rotating handler
+handler = TimedRotatingFileHandler(
+    'app.log',
+    when='D',     # Rotate at midnight
+    interval=14,          # Every 14 days
+    backupCount=365,       # Keep 365 days worth
+    atTime=None,         # At midnight (default)
+    utc=False           # Use local time
+)
+
+# Set format with date
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+handler.setFormatter(formatter)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+logger.addHandler(handler)
+
+logger.info("This will rotate daily at midnight")
 
 load_dotenv()
 TIMEZONE = os.getenv("TIMEZONE")
@@ -31,17 +53,22 @@ def stream_available():
         data = response.json()
         if data.get("full") == 1:
             print("This system is full.")
+            logger.warning("This system is full.")
         elif not data.get("autoscale") and data.get("percentage", 0) > 74:
             print(f"This system is {round(data.get('percentage', 0))}% full.")
             print(f"Status message: {data.get('message')}")
+            logger.warning(f"This system is {round(data.get('percentage', 0))}% full. Status message: {data.get('message')}")
         if data.get("status") == 1:
             print("Stream is online.")
+            logger.info("Stream is online.")
             return True
         else:
             print("Stream is offline.")
+            logger.info("Stream is offline.")
             return False
     except requests.RequestException as e:
         print(f"Error checking stream status: {e}")
+        logger.error(f"Error checking stream status: {e}")
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str) -> dict:
     """
@@ -64,8 +91,10 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str) -> dict:
     try:
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()  # Raises for HTTP errors
+        logger.info(f"Sent Telegram message to {chat_id}")
         return response.json()
     except requests.RequestException as e:
+        logger.error(f"Error sending Telegram message: {e}")
         return {"ok": False, "error": str(e)}
 
 
@@ -90,10 +119,13 @@ def send_telegram_file(bot_token: str, chat_id: str, file_path: str, caption: st
             data = {"chat_id": chat_id, "caption": caption}
             response = requests.post(url, data=data, files=files, timeout=30)
             response.raise_for_status()
+            logger.info(f"Sent Telegram file {file_path} to {chat_id}")
             return response.json()
     except FileNotFoundError:
         return {"ok": False, "error": f"File not found: {file_path}"}
+        logger.error(f"File not found: {file_path}")
     except requests.RequestException as e:
+        logger.error(f"Error sending Telegram file: {e}")
         return {"ok": False, "error": str(e)}
 
 
@@ -103,11 +135,14 @@ def record_stream(service_type):
     output_file = f"{OUTPUT_DIR}/recording_{timestamp}.mp3"
 
     print(f"[{datetime.now()}] Waiting for stream availability...")
+    logger.info(f"Waiting for stream availability for {service_type}")
     while not stream_available():
         print(f"[{datetime.now()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
+        logger.info(f"Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
         time.sleep(CHECK_INTERVAL)
 
     print(f"[{datetime.now()}] Stream online! Starting recording to {output_file}")
+    logger.info(f"Stream online! Starting recording to {output_file}")
     send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Recording started at {timestamp}.")
 
     # Run ffmpeg until the stream drops
@@ -117,14 +152,19 @@ def record_stream(service_type):
         "-c", "copy",
         output_file
     ])
-
+    logger.info(f"Started ffmpeg process with PID {process.pid} for recording.")
     # Monitor stream; stop when unavailable
     while stream_available():
         time.sleep(CHECK_INTERVAL)
 
     print(f"[{datetime.now()}] Stream stopped. Ending recording.")
+    logger.info(f"Stream stopped. Ending recording of {output_file}.")
     send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
-    transcribe_audio(output_file)
+    try:
+        transcribe_audio(output_file)
+    except Exception as e:
+        logger.error(f"Error during transcription: {e}")
+    logger.info(f"Transcription completed for {output_file}.")
 
     if service_type == "sunday_morning":    # After the Sunday morning recording ends, start checking for stream again because i guess they pause the stream for sunday school
         send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Sunday morning recording finished. Starting next recording after sunday school")
@@ -140,12 +180,17 @@ def record_stream(service_type):
             "-c", "copy",
             output_file
         ])
+        logger.info(f"Started ffmpeg process with PID {process.pid} for recording.")
         while stream_available():
             time.sleep(CHECK_INTERVAL)
         print(f"[{datetime.now()}] Stream stopped. Ending recording.")
+        logger.info(f"Stream stopped. Ending recording of {output_file}.")
         send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
-        transcribe_audio(output_file)
-
+        try:
+            transcribe_audio(output_file)
+        except Exception as e:
+            logger.error(f"Error during transcription: {e}")
+        logger.info(f"Transcription completed for {output_file}.")
     process.terminate()
     process.wait()
 
@@ -167,7 +212,7 @@ def schedule_recordings():
     schedule.every().sunday.at("18:30").do(record_stream,"sunday_evening")
     schedule.every().tuesday.at("19:00").do(record_stream,"tuesday_youth_evening")
     print(schedule.get_jobs())
-
+    logger.info(f"Scheduled jobs: {schedule.get_jobs()}")
     print(STREAM_STATUS_URL)
     print(f"Using timezone: {TIMEZONE}")
     print(STREAM_URL)
@@ -178,6 +223,13 @@ def schedule_recordings():
         time.sleep(1)
 
 if __name__ == "__main__":
-    
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    try:
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+    except Exception as e:
+        logger.error(f"Error creating output directory {OUTPUT_DIR}: {e}")
+    try:
+        os.makedirs(TRANSCRIPTIONS_DIR, exist_ok=True)
+    except Exception as e:
+        logger.error(f"Error creating transcriptions directory {TRANSCRIPTIONS_DIR}: {e}")
     schedule_recordings()
+    

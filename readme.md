@@ -15,6 +15,11 @@ Also, I would like to record the song numbers we sing and put it on a graph. I h
 docker compose up -d --build
 ```
 
+you can ssh into the container with this command:
+```
+docker exec -it church-recorder bash
+```
+
 ## Start the web interface for viewing recordings
 
 The flask web interface is not enabled in the docker container yet, so if you install the project without building the docker container, you can run the command ```python3 webserver.py``` in the same folder as the rest of the code. Note that you may have to run ```python3 -m venv venv && source venv/bin/activate``` first to enable a virtual environment.
