@@ -12,6 +12,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
+    git \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -27,6 +28,7 @@ COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --user --no-cache-dir -r requirements.txt
+RUN pip install git+https://github.com/openai/whisper.git
 
 # Copy application code
 COPY --chown=app:app new_recorder.py .
