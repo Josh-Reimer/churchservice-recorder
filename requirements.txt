@@ -5,4 +5,4 @@ schedule==1.2.0
 requests==2.31.0
 tzlocal==5.2
 pytz==2023.3
-whisper
+openai-whisper
