@@ -43,6 +43,7 @@ OUTPUT_DIR = "./recordings"
 TRANSCRIPTIONS_DIR = "./transcriptions"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+CHECK_TIMEOUT = 90 # minutes
 
 def stream_available():
     """Check stream status from external API and print status."""
@@ -136,9 +137,17 @@ def record_stream(service_type):
 
     print(f"[{datetime.now()}] Waiting for stream availability...")
     logger.info(f"Waiting for stream availability for {service_type}")
+    total_time = 0
     while not stream_available():
         print(f"[{datetime.now()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
+        total_time += CHECK_INTERVAL
         logger.info(f"Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
+        if total_time >= CHECK_TIMEOUT * 60:
+            print(f"[{datetime.now()}] Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")
+            logger.warning(f"Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")
+            send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")
+            return
+        
         time.sleep(CHECK_INTERVAL)
 
     print(f"[{datetime.now()}] Stream online! Starting recording to {output_file}")
@@ -196,6 +205,7 @@ def record_stream(service_type):
 
 def transcribe_audio(file_path):
     import whisper
+    import gc
 
     model = whisper.load_model("large")  # Change to "tiny", "small", "medium", or "large" as needed
     result = model.transcribe(file_path)
@@ -204,6 +214,8 @@ def transcribe_audio(file_path):
     with open(transciption_text_file, "w", encoding="utf-8") as f:
         f.write(result["text"])
     send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, transciption_text_file, caption=f"Transcription finished: {transciption_text_file}")
+    del model
+    gc.collect()
 
 def schedule_recordings():
     """Schedule Sunday recordings at 10:00 and 18:00."""
