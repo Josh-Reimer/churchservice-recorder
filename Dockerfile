@@ -12,7 +12,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
-    git \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -26,13 +25,16 @@ COPY models models
 # Copy requirements file first (for better Docker layer caching)
 COPY requirements.txt .
 
+COPY --chown=app:app webserver.py .
+COPY --chown=app:app templates templates
+COPY appicon.png .
+
 # Install Python dependencies
 RUN pip install --user --no-cache-dir -r requirements.txt
-RUN pip install git+https://github.com/openai/whisper.git
 
 # Copy application code
 COPY --chown=app:app new_recorder.py .
-
+COPY config config
 # Create directories for recordings and transcriptions
 RUN mkdir -p /app/recordings /app/transcriptions
 

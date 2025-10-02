@@ -6,3 +6,10 @@ requests==2.31.0
 tzlocal==5.2
 pytz==2023.3
 openai-whisper
+flask
+mutagen
+flask-wtf
+--find-links https://download.pytorch.org/whl/cpu/torch_stable.html
+torch==2.3.0+cpu
+torchaudio==2.3.0+cpu
+pyyaml

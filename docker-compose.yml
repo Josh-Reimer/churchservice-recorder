@@ -7,6 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: church-recorder
     restart: unless-stopped
+    command: python3 new_recorder.py
     
     # Environment variables (DO NOT use env_file for secrets in production)
     environment:
@@ -21,6 +22,7 @@ services:
       - STREAM_URL=${STREAM_URL}
       - STREAM_STATUS_URL=${STREAM_STATUS_URL}
       # Add other environment variables as needed
+      - STREAM_CONFIG_FILE=/config/streams.yml
     
     # Volumes for persistent data
     volumes:
@@ -46,6 +48,24 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  webserver:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: church-webserver
+    restart: unless-stopped
+    ports:
+      - "5000:5000"  # Expose port 5000 for the web server
+    command: python3 webserver.py
+    volumes:
+      - ./recordings:/app/recordings:rw
+      - ./transcriptions:/app/transcriptions:rw
+    environment:
+      - TZ=${TZ:-UTC}
+      - PYTHONPATH=/app
+      
+      - USERNAME=${USERNAME:-admin}
 
 networks:
   recorder-network:

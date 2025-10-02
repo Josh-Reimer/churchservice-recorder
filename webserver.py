@@ -14,8 +14,11 @@ csrf = CSRFProtect(app)
 USERNAME = "admin"
 PASSWORD = "42"
 
-RECORDINGS_FOLDER = os.path.join(os.getcwd(), "recordings-archive")
-TRANSCRIPTIONS_FOLDER = os.path.join(os.getcwd(), "recordings-archive/transcriptions")
+RECORDINGS_FOLDER = "/app/recordings"
+TRANSCRIPTIONS_FOLDER = "/app/transcriptions"
+
+print("Recordings directory contents:", os.listdir(RECORDINGS_FOLDER))
+print("Transcriptions directory contents:", os.listdir(TRANSCRIPTIONS_FOLDER))
 
 def get_audio_lengths(files):
     """
@@ -86,4 +89,7 @@ def serve_icon():
     return send_from_directory(os.getcwd(), "appicon.png")
 
 if __name__ == "__main__":
+    host = "0.0.0.0"
+    port = 5000
     app.run(debug=True, host="0.0.0.0", port=5000)
+    print(f"Web server started on http://{host}:{port}")
