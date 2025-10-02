@@ -5,6 +5,7 @@
 <h1 align="center">ByteWorship Recorder</h1>
 
 A python program that can record listentochurch icecast streams to an mp3 file. You can install it using docker on a Debian linux machine.
+The recordings and transcriptions are stored in ```recordings``` and ```transcriptions``` from the folder that the ```Dockerfile``` is in.
 
 ## Goals
 I'd like to extract Sunday morning announcements out of transcribed church services. Perhaps a flask webapp or mobile PWA to view them.
@@ -19,10 +20,29 @@ you can ssh into the container with this command:
 ```
 docker exec -it church-recorder bash
 ```
+and view the webserver container like so:
+```
+docker exec -it church-webserver bash
+```
 
-## Start the web interface for viewing recordings
+## View the web interface for recordings and transcriptions
+By default, the flask web ui is at [http://0.0.0.0:5000](http://0.0.0.0:5000)
+The default user name is ```admin``` and the default password is ```42```. There is not a way to change them right now except by editing the values in ```webserver.py```
 
-The flask web interface is not enabled in the docker container yet, so if you install the project without building the docker container, you can run the command ```python3 webserver.py``` in the same folder as the rest of the code. Note that you may have to run ```python3 -m venv venv && source venv/bin/activate``` first to enable a virtual environment.
+## Multi-stream recording
+I am working on building a mulit-stream recording function which will use the config/streams.yml for listing the stream urls and timezones. 
+Here is an example:
+```
+streams:
+  - name: stream1
+    url: https://example.com/stream1.mp3
+    status_url: https://example.com/api/stream1/status
+    timezone: America/Mexico_City
+  - name: stream2
+    url: https://example.com/stream2.mp3
+    status_url: https://example.com/api/stream2/status
+    timezone: America/Denver
+```
 
 
 ## APIs used and keys required
@@ -37,6 +57,8 @@ OPENAI_API_KEY=your_openai_api_key_here
 STREAM_URL=your_icecast_stream_url_here
 STREAM_STATUS_URL=your_stream_status_url_here
 TIMEZONE=your_timezone_here
+LOG_LEVEL="INFO"
+ADMIN_PASS_HASH="HASH HERE"
 EOF
 ```
 
