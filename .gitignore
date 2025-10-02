@@ -45,3 +45,5 @@ __pycache__
 recordings
 transcriptions
 recordings-archive
+config/streams.yml
+*.log
