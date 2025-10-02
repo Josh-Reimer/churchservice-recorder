@@ -1,0 +1,37 @@
+streams:
+  - name: stream1
+    url: https://example.com/stream1.mp3
+    status_url: https://example.com/api/stream1/status
+    timezone: America/Mexico_City
+  - name: stream2
+    url: https://example.com/stream2.mp3
+    status_url: https://example.com/api/stream2/status
+    timezone: America/Denver
+  - name: stream3
+    url: https://example.com/stream3.mp3
+    status_url: https://example.com/api/stream3/status
+    timezone: America/Chicago
+  - name: stream4
+    url: https://example.com/stream4.mp3
+    status_url: https://example.com/api/stream4/status
+    timezone: America/Denver
+  - name: stream5
+    url: https://example.com/stream5.mp3
+    status_url: https://example.com/api/stream5/status
+    timezone: America/Chicago
+  - name: stream6
+    url: https://example.com/stream6.mp3
+    status_url: https://example.com/api/stream6/status
+    timezone: America/Denver
+  - name: stream7
+    url: https://example.com/stream7.mp3
+    status_url: https://example.com/api/stream7/status
+    timezone: America/Regina
+  - name: stream8
+    url: https://example.com/stream8.mp3
+    status_url: https://example.com/api/stream8/status
+    timezone: America/Chicago
+  - name: stream9
+    url: https://example.com/stream9.mp3
+    status_url: https://example.com/api/stream9/status
+    timezone: America/Washington
