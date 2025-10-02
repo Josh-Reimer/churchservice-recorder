@@ -9,6 +9,20 @@ import tzlocal
 import pytz
 import logging
 from logging.handlers import TimedRotatingFileHandler
+import yaml
+
+with open("config/streams.yml", "r") as f:
+    streams_config = yaml.safe_load(f)
+    #print("Loaded streams configuration:", streams_config.get("streams", []))
+    timezones = [stream.get("timezone") for stream in streams_config.get("streams", []) if stream.get("timezone")]
+    timezones = [stream.get("timezone") for stream in streams_config.get("streams", []) if stream.get("timezone")]
+
+for tz_name in timezones:
+    tz = pytz.timezone(tz_name)
+    now = datetime.now(tz)  # current time in that timezone
+    print(f"{tz_name}: {now.strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
+
+
 
 # Create timed rotating handler
 handler = TimedRotatingFileHandler(
