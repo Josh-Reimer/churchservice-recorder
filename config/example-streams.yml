@@ -3,35 +3,53 @@ streams:
     url: https://example.com/stream1.mp3
     status_url: https://example.com/api/stream1/status
     timezone: America/Mexico_City
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
   - name: stream2
     url: https://example.com/stream2.mp3
     status_url: https://example.com/api/stream2/status
     timezone: America/Denver
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
   - name: stream3
     url: https://example.com/stream3.mp3
     status_url: https://example.com/api/stream3/status
     timezone: America/Chicago
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
   - name: stream4
     url: https://example.com/stream4.mp3
     status_url: https://example.com/api/stream4/status
     timezone: America/Denver
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
   - name: stream5
     url: https://example.com/stream5.mp3
     status_url: https://example.com/api/stream5/status
     timezone: America/Chicago
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
   - name: stream6
     url: https://example.com/stream6.mp3
     status_url: https://example.com/api/stream6/status
     timezone: America/Denver
   - name: stream7
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
     url: https://example.com/stream7.mp3
     status_url: https://example.com/api/stream7/status
     timezone: America/Regina
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
   - name: stream8
     url: https://example.com/stream8.mp3
     status_url: https://example.com/api/stream8/status
     timezone: America/Chicago
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
   - name: stream9
     url: https://example.com/stream9.mp3
     status_url: https://example.com/api/stream9/status
     timezone: America/Washington
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"

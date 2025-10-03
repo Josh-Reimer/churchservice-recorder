@@ -38,10 +38,14 @@ streams:
     url: https://example.com/stream1.mp3
     status_url: https://example.com/api/stream1/status
     timezone: America/Mexico_City
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
   - name: stream2
     url: https://example.com/stream2.mp3
     status_url: https://example.com/api/stream2/status
     timezone: America/Denver
+    sunday_morning_service_time: "10:00"
+    sunday_evening_service_time: "18:00"
 ```
 
 
