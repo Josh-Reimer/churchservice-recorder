@@ -1,39 +1,46 @@
 streams:
   - name: stream1
+    full_name: Stream One Congregation
     url: https://example.com/stream1.mp3
     status_url: https://example.com/api/stream1/status
     timezone: America/Mexico_City
     sunday_morning_service_time: "10:00"
     sunday_evening_service_time: "18:00"
   - name: stream2
+    full_name: Stream Two Congregation
     url: https://example.com/stream2.mp3
     status_url: https://example.com/api/stream2/status
     timezone: America/Denver
     sunday_morning_service_time: "10:00"
     sunday_evening_service_time: "18:00"
   - name: stream3
+    full_name: Stream Three Congregation
     url: https://example.com/stream3.mp3
     status_url: https://example.com/api/stream3/status
     timezone: America/Chicago
     sunday_morning_service_time: "10:00"
     sunday_evening_service_time: "18:00"
   - name: stream4
+    full_name: Stream Four Congregation
     url: https://example.com/stream4.mp3
     status_url: https://example.com/api/stream4/status
     timezone: America/Denver
     sunday_morning_service_time: "10:00"
     sunday_evening_service_time: "18:00"
   - name: stream5
+    full_name: Stream Five Congregation
     url: https://example.com/stream5.mp3
     status_url: https://example.com/api/stream5/status
     timezone: America/Chicago
     sunday_morning_service_time: "10:00"
     sunday_evening_service_time: "18:00"
   - name: stream6
+    full_name: Stream Six Congregation
     url: https://example.com/stream6.mp3
     status_url: https://example.com/api/stream6/status
     timezone: America/Denver
   - name: stream7
+    full_name: Stream Seven Congregation
     sunday_morning_service_time: "10:00"
     sunday_evening_service_time: "18:00"
     url: https://example.com/stream7.mp3
@@ -42,12 +49,14 @@ streams:
     sunday_morning_service_time: "10:00"
     sunday_evening_service_time: "18:00"
   - name: stream8
+    full_name: Stream Eight Congregation
     url: https://example.com/stream8.mp3
     status_url: https://example.com/api/stream8/status
     timezone: America/Chicago
     sunday_morning_service_time: "10:00"
     sunday_evening_service_time: "18:00"
   - name: stream9
+    full_name: Stream Nine Congregation
     url: https://example.com/stream9.mp3
     status_url: https://example.com/api/stream9/status
     timezone: America/Washington
