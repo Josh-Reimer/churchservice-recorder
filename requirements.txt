@@ -13,3 +13,4 @@ flask-wtf
 torch==2.3.0+cpu
 torchaudio==2.3.0+cpu
 pyyaml
+psutil
