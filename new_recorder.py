@@ -40,18 +40,30 @@ sunday_evening_services = []
 services = []
 
 class StreamInfo:
-    def __init__(self, name, url,status_url, timezone, morning_time, evening_time):
+    def __init__(self, name, url,status_url, timezone, morning_time, evening_time, audio_dir, transcription_dir):
         self.name = name
         self.url = url
         self.status_url = status_url
         self.timezone = timezone
         self.morning_time = morning_time
         self.evening_time = evening_time
+        self.audio_dir = audio_dir
+        self.transcription_dir = transcription_dir
+
+OUTPUT_DIR = "./recordings"
+TRANSCRIPTIONS_DIR = "./transcriptions"
 
 for stream in streams_config.get("streams", []):
     name = stream.get("name", "Unknown")
     tz_name = stream.get("timezone", "UTC")
     stream_tz = pytz.timezone(tz_name)
+
+    full_name = stream.get("full_name", stream.get("name", "Unknown"))
+    safe_name = full_name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
+    output_dir = os.path.join(OUTPUT_DIR, safe_name)
+    transcription_dir = os.path.join("./transcriptions", safe_name)
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(transcription_dir, exist_ok=True)
 
     morning_str = convert_time(stream.get("sunday_morning_service_time"), stream_tz)
     sunday_morning_services.append((name, morning_str))
@@ -65,7 +77,9 @@ for stream in streams_config.get("streams", []):
         status_url=stream.get("status_url", ""),
         timezone=tz_name,
         morning_time=morning_str,
-        evening_time=evening_str
+        evening_time=evening_str,
+        audio_dir = output_dir,
+        transcription_dir = transcription_dir
     )
     services.append(stream_info)
 
@@ -74,11 +88,6 @@ for stream in streams_config.get("streams", []):
     print(f"  Sunday Morning Service (your time): {morning_str}")
     print(f"  Sunday Evening Service (your time): {evening_str}")
     print()
-
-
-for stream in streams_config.get("streams", []):
-    url = stream.get("url")
-    #print(f"Checking stream URL: {url}")
 
 # Create timed rotating handler
 handler = TimedRotatingFileHandler(
@@ -109,27 +118,6 @@ time.tzset()
 STREAM_URL = os.getenv("STREAM_URL")
 STREAM_STATUS_URL = os.getenv("STREAM_STATUS_URL")
 CHECK_INTERVAL = 30  # seconds
-OUTPUT_DIR = "./recordings"
-
-
-
-
-CONGREGATION_OUTPUT_DIRS = []
-CONGREGATION_TRANSCRIPTIONS_DIRS = []
-
-for stream in streams_config.get("streams", []):
-    full_name = stream.get("full_name", stream.get("name", "Unknown"))
-    safe_name = full_name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
-    output_dir = os.path.join(OUTPUT_DIR, safe_name)
-    CONGREGATION_OUTPUT_DIRS.append((full_name, output_dir))
-    transcription_dir = os.path.join("./transcriptions", safe_name)
-    CONGREGATION_TRANSCRIPTIONS_DIRS.append((full_name, transcription_dir))
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(transcription_dir, exist_ok=True)
-
-#print(CONGREGATION_OUTPUT_DIRS)
-
-TRANSCRIPTIONS_DIR = "./transcriptions"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 CHECK_TIMEOUT = 90 # minutes
@@ -219,10 +207,10 @@ def send_telegram_file(bot_token: str, chat_id: str, file_path: str, caption: st
         return {"ok": False, "error": str(e)}
 
 
-def record_stream(service_type, url,status_url, output_dir=OUTPUT_DIR):
+def record_stream(service_type, url,status_url, output_dir, transcription_dir):
     """Record the stream until it becomes unavailable."""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    output_file = f"{OUTPUT_DIR}/recording_{timestamp}.mp3"
+    output_file = f"{output_dir}/recording_{timestamp}.mp3"
 
     print(f"[{datetime.now()}] Waiting for stream availability...")
     logger.info(f"Waiting for stream availability for {service_type}")
@@ -258,7 +246,7 @@ def record_stream(service_type, url,status_url, output_dir=OUTPUT_DIR):
     logger.info(f"Stream stopped. Ending recording of {output_file}.")
     send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
     try:
-        transcribe_audio(output_file)
+        transcribe_audio(output_file, transcription_dir)
     except Exception as e:
         logger.error(f"Error during transcription: {e}")
     logger.info(f"Transcription completed for {output_file}.")
@@ -269,7 +257,7 @@ def record_stream(service_type, url,status_url, output_dir=OUTPUT_DIR):
             print(f"[{datetime.now()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
             time.sleep(CHECK_INTERVAL)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-        output_file = f"{OUTPUT_DIR}/recording_{timestamp}.mp3"
+        output_file = f"{output_dir}/recording_{timestamp}.mp3"
         # Run ffmpeg until the stream drops
         process_sunday_school = run_ffmpeg(service_type, url, output_file.replace(".mp3",""), "mp3")
         logger.info(f"Started ffmpeg process with PID {process_sunday_school.pid} for recording.")
@@ -279,7 +267,7 @@ def record_stream(service_type, url,status_url, output_dir=OUTPUT_DIR):
         logger.info(f"Stream stopped. Ending recording of {output_file}.")
         send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
         try:
-            transcribe_audio(output_file)
+            transcribe_audio(output_file, transcription_dir)
         except Exception as e:
             logger.error(f"Error during transcription: {e}")
         logger.info(f"Transcription completed for {output_file}.")
@@ -313,7 +301,7 @@ def run_ffmpeg(name, url, output_path, output_format="mp3"):
         logger.error(f"Error running FFmpeg for {name}: {e}")
         raise
 
-def transcribe_audio(file_path):
+def transcribe_audio(file_path, transcription_dir):
     import whisper
     import gc
     import torch
@@ -328,7 +316,7 @@ def transcribe_audio(file_path):
         print(text)
 
         transciption_text_file = os.path.join(
-            TRANSCRIPTIONS_DIR, os.path.basename(file_path).replace(".mp3", ".txt")
+            transcription_dir, os.path.basename(file_path).replace(".mp3", ".txt")
         )
         with open(transciption_text_file, "w", encoding="utf-8") as f:
             f.write(text)
@@ -374,7 +362,7 @@ def schedule_recordings():
             safe_name = svc.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
             output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
             os.makedirs(output_dir_for_svc, exist_ok=True)
-            schedule.every().sunday.at(svc.morning_time).do(threaded,record_stream, "sunday_morning", svc.url,svc.status_url, output_dir_for_svc)
+            schedule.every().sunday.at(svc.morning_time).do(threaded,record_stream, "sunday_morning", svc.url,svc.status_url, svc.audio_dir, svc.transcription_dir)
             print(f"Scheduled {svc.name} sunday_morning at {svc.morning_time} -> {output_dir_for_svc}")
             logger.info(f"Scheduled {svc.name} sunday_morning at {svc.morning_time} -> {output_dir_for_svc}")
 
@@ -382,7 +370,7 @@ def schedule_recordings():
             safe_name = svc.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
             output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
             os.makedirs(output_dir_for_svc, exist_ok=True)
-            schedule.every().sunday.at(svc.evening_time).do(threaded,record_stream, "sunday_evening", svc.url,svc.status_url, output_dir_for_svc)
+            schedule.every().sunday.at(svc.evening_time).do(threaded,record_stream, "sunday_evening", svc.url,svc.status_url, svc.audio_dir, svc.transcription_dir)
             print(f"Scheduled {svc.name} sunday_evening at {svc.evening_time} -> {output_dir_for_svc}")
             logger.info(f"Scheduled {svc.name} sunday_evening at {svc.evening_time} -> {output_dir_for_svc}")
 
