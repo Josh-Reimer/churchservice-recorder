@@ -172,8 +172,13 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str) -> dict:
         logger.info(f"Sent Telegram message to {chat_id}")
         return response.json()
     except requests.RequestException as e:
-        logger.error(f"Error sending Telegram message: {e}")
-        return {"ok": False, "error": str(e)}
+        try:
+            print("Telegram response:", response.text)
+            logger.error(f"Telegram API said: {response.text}")
+        except:
+            print("No response text from Telegram.")
+        raise
+
 
 
 def send_telegram_file(bot_token: str, chat_id: str, file_path: str, caption: str = "") -> dict:
@@ -205,6 +210,8 @@ def send_telegram_file(bot_token: str, chat_id: str, file_path: str, caption: st
     except requests.RequestException as e:
         logger.error(f"Error sending Telegram file: {e}")
         return {"ok": False, "error": str(e)}
+
+send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Church Service Recorder started.")
 
 
 def record_stream(service_type, url,status_url, output_dir, transcription_dir):

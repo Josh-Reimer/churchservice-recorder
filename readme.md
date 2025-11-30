@@ -57,6 +57,7 @@ All of the secrets in this program will need to be stored in a .env file. You ca
 ```
 cat <<EOF > .env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_CHAT_ID=your_telegram_user_id_here
 OPENAI_API_KEY=your_openai_api_key_here
 STREAM_URL=your_icecast_stream_url_here
 STREAM_STATUS_URL=your_stream_status_url_here
