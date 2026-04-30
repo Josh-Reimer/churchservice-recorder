@@ -47,3 +47,11 @@ transcriptions
 recordings-archive
 config/streams.yml
 *.log
+streams.txt
+config/streams-ai.yml
+config/streams (Copy).yml
+.gitignore
+.gitignore
+models/large-v3.pt
+config/now.yml
+app.log.2026-01-03
