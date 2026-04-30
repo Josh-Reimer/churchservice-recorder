@@ -90,6 +90,6 @@ def serve_icon():
 
 if __name__ == "__main__":
     host = "0.0.0.0"
-    port = 5000
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    port = 5003
+    app.run(debug=True, host="0.0.0.0", port=5003)
     print(f"Web server started on http://{host}:{port}")
