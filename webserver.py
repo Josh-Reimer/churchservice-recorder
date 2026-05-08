@@ -88,6 +88,10 @@ def serve_icon():
         abort(404)
     return send_from_directory(os.getcwd(), "appicon.png")
 
+@app.route("/health")
+def healths():
+    return {"status": "ok"},200
+
 if __name__ == "__main__":
     host = "0.0.0.0"
     port = 5003

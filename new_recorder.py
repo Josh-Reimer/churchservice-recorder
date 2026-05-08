@@ -2,20 +2,19 @@ import subprocess
 import time
 import requests
 import schedule
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
-import tzlocal
 import pytz
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import yaml
 from concurrent.futures import ThreadPoolExecutor
 import subprocess
-import signal
 from threading import Thread
 import atexit
 import psutil
+import queue
 # Load config
 with open("config/streams.yml", "r") as f:
     streams_config = yaml.safe_load(f)
@@ -33,14 +32,16 @@ def convert_time(t, stream_tz):
         return "N/A"
     dt = datetime.strptime(t, "%H:%M")
     localized = stream_tz.localize(datetime.combine(datetime.now().date(), dt.time()))
-    return localized.astimezone(local_tz).strftime("%H:%M")
+    return localized.astimezone(local_tz)
 
 sunday_morning_services = []
 sunday_evening_services = []
 services = []
 
+last_recording_ending = None   # should actually be the time the last recording ends, not the config time ending
+last_hours = []
 class StreamInfo:
-    def __init__(self, name, url,status_url, timezone, morning_time, evening_time, audio_dir, transcription_dir):
+    def __init__(self, name, url,status_url, timezone, morning_time, evening_time, audio_dir, transcription_dir, is_last_stream):
         self.name = name
         self.url = url
         self.status_url = status_url
@@ -49,45 +50,12 @@ class StreamInfo:
         self.evening_time = evening_time
         self.audio_dir = audio_dir
         self.transcription_dir = transcription_dir
+        self.is_last_stream = is_last_stream
+       
 
 OUTPUT_DIR = "./recordings"
 TRANSCRIPTIONS_DIR = "./transcriptions"
-
-for stream in streams_config.get("streams", []):
-    name = stream.get("name", "Unknown")
-    tz_name = stream.get("timezone", "UTC")
-    stream_tz = pytz.timezone(tz_name)
-
-    full_name = stream.get("full_name", stream.get("name", "Unknown"))
-    safe_name = full_name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
-    output_dir = os.path.join(OUTPUT_DIR, safe_name)
-    transcription_dir = os.path.join("./transcriptions", safe_name)
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(transcription_dir, exist_ok=True)
-
-    morning_str = convert_time(stream.get("sunday_morning_service_time"), stream_tz)
-    sunday_morning_services.append((name, morning_str))
-   
-    evening_str = convert_time(stream.get("sunday_evening_service_time"), stream_tz)
-    sunday_evening_services.append((name, evening_str))
-
-    stream_info = StreamInfo(
-        name=name,
-        url=stream.get("url", ""),
-        status_url=stream.get("status_url", ""),
-        timezone=tz_name,
-        morning_time=morning_str,
-        evening_time=evening_str,
-        audio_dir = output_dir,
-        transcription_dir = transcription_dir
-    )
-    services.append(stream_info)
-
-    print(f"Stream: {name}")
-    print(f"  Timezone: {tz_name}")
-    print(f"  Sunday Morning Service (your time): {morning_str}")
-    print(f"  Sunday Evening Service (your time): {evening_str}")
-    print()
+transcription_queue = queue.Queue(maxsize=0)
 
 # Create timed rotating handler
 handler = TimedRotatingFileHandler(
@@ -147,6 +115,7 @@ def stream_available(status_url):
     except requests.RequestException as e:
         print(f"Error checking stream status: {e}")
         logger.error(f"Error checking stream status: {e}")
+        return False
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str) -> dict:
     """
@@ -211,7 +180,7 @@ def send_telegram_file(bot_token: str, chat_id: str, file_path: str, caption: st
         logger.error(f"Error sending Telegram file: {e}")
         return {"ok": False, "error": str(e)}
 
-send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Church Service Recorder started.")
+#send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Church Service Recorder started.")
 
 
 def record_stream(service_type, url,status_url, output_dir, transcription_dir):
@@ -241,8 +210,10 @@ def record_stream(service_type, url,status_url, output_dir, transcription_dir):
     process_main = run_ffmpeg(service_type, url, output_file.replace(".mp3",""), "mp3")
     logger.info(f"Started ffmpeg process with PID {process_main.pid} for recording.")
     # Monitor stream; stop when unavailable
+
     while stream_available(status_url):
         time.sleep(CHECK_INTERVAL)
+
     print(f"[{datetime.now()}] Stream stopped. Ending recording.")
     process_main.terminate()
     try:
@@ -253,7 +224,8 @@ def record_stream(service_type, url,status_url, output_dir, transcription_dir):
     logger.info(f"Stream stopped. Ending recording of {output_file}.")
     send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
     try:
-        transcribe_audio(output_file, transcription_dir)
+        #transcribe_audio(output_file, transcription_dir)
+        transcription_queue.put([output_file,transcription_dir])
     except Exception as e:
         logger.error(f"Error during transcription: {e}")
     logger.info(f"Transcription completed for {output_file}.")
@@ -263,8 +235,10 @@ def record_stream(service_type, url,status_url, output_dir, transcription_dir):
         while not stream_available(status_url):
             print(f"[{datetime.now()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
             time.sleep(CHECK_INTERVAL)
+
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
         output_file = f"{output_dir}/recording_{timestamp}.mp3"
+        
         # Run ffmpeg until the stream drops
         process_sunday_school = run_ffmpeg(service_type, url, output_file.replace(".mp3",""), "mp3")
         logger.info(f"Started ffmpeg process with PID {process_sunday_school.pid} for recording.")
@@ -273,18 +247,21 @@ def record_stream(service_type, url,status_url, output_dir, transcription_dir):
         print(f"[{datetime.now()}] Stream stopped. Ending recording.")
         logger.info(f"Stream stopped. Ending recording of {output_file}.")
         send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
+        if service_type == "sunday_morning" and 'process_sunday_school' in locals():
+            process_sunday_school.terminate()
+            try:
+                process_sunday_school.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process_sunday_school.kill()
+
+        
         try:
-            transcribe_audio(output_file, transcription_dir)
+            #transcribe_audio(output_file, transcription_dir)
+            transcription_queue.put([output_file,transcription_dir])
         except Exception as e:
             logger.error(f"Error during transcription: {e}")
         logger.info(f"Transcription completed for {output_file}.")
-    if service_type == "sunday_morning" and 'process_sunday_school' in locals():
-        process_sunday_school.terminate()
-        try:
-            process_sunday_school.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process_sunday_school.kill()
-
+    
 def run_ffmpeg(name, url, output_path, output_format="mp3"):
     """Run an FFmpeg process and return the process handle."""
     cmd = [
@@ -308,44 +285,60 @@ def run_ffmpeg(name, url, output_path, output_format="mp3"):
         logger.error(f"Error running FFmpeg for {name}: {e}")
         raise
 
-def transcribe_audio(file_path, transcription_dir):
+def gpu_transcribe_worker():
     import whisper
     import gc
     import torch
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Loading Whisper model on {device}")
-    try:
-        model = whisper.load_model("large", device=device)
-        # use fp16 on CUDA to reduce memory & speed up
-        result = model.transcribe(file_path, fp16=(device == "cuda"))
-        text = result.get("text", "")
-        print(text)
+    '''
+    todo:
+    use python queue
+    loop through every service in services and transcribe each audio file one at a time after the last_recording_ending is finished to avoid gpu overload
+    keep the model loaded until the last transcription is done
+    
+    '''
+    while True:
+        audio_file_path = transcription_queue.get()[0]
+        
+        if audio_file_path is None:
+            break
 
-        transciption_text_file = os.path.join(
-            transcription_dir, os.path.basename(file_path).replace(".mp3", ".txt")
-        )
-        with open(transciption_text_file, "w", encoding="utf-8") as f:
-            f.write(text)
-
-        send_telegram_file(
-            TELEGRAM_BOT_TOKEN,
-            TELEGRAM_CHAT_ID,
-            transciption_text_file,
-            caption=f"Transcription finished: {transciption_text_file}"
-        )
-
-    except Exception as e:
-        logger.error(f"Transcription error for {file_path}: {e}")
-        raise
-    finally:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Loading Whisper model on {device}")
         try:
-            del model
-            if device == "cuda":
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
-        gc.collect()
+            model = whisper.load_model("large", device=device)
+            # use fp16 on CUDA to reduce memory & speed up
+            result = model.transcribe(audio_file_path, fp16=(device == "cuda"))
+            text = result.get("text", "")
+            print(text)
+
+            transcription_text_file = os.path.join(
+                transcription_queue.get()[1], os.path.basename(audio_file_path).replace(".mp3", ".txt")
+            )
+            with open(transcription_text_file, "w", encoding="utf-8") as f:
+                f.write(text)
+
+            send_telegram_file(
+                TELEGRAM_BOT_TOKEN,
+                TELEGRAM_CHAT_ID,
+                transcription_text_file,
+                caption=f"Transcription finished: {transcription_text_file}"
+            )
+
+        except Exception as e:
+            logger.error(f"Transcription error for {audio_file_path}: {e}")
+            raise
+        finally:
+            try:
+                del model
+                if device == "cuda":
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            gc.collect()
+
+
+
 def kill_ffmpeg_children():
     for proc in psutil.process_iter(['pid', 'name']):
         if 'ffmpeg' in proc.info['name']:
@@ -359,38 +352,15 @@ def threaded(job_func, *args):
     executor = ThreadPoolExecutor(max_workers=8)
     executor.submit(job_func, *args)
 
-def schedule_recordings():
-    """Schedule recordings based on streams_config."""
+def schedule_transcriptions():
+    #needs work
+    """Schedule transcriptions after last recording ends."""
+    print(last_recording_starts)
+    worker_thread = Thread(target=gpu_transcribe_worker,daemon = True)
+    worker_thread.start()
 
-    #TODO: Add more schedules from streams_config
-    for svc in services:
-        # schedule using StreamInfo objects
-        if svc.morning_time and svc.morning_time != "N/A":
-            safe_name = svc.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
-            output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
-            os.makedirs(output_dir_for_svc, exist_ok=True)
-            schedule.every().sunday.at(svc.morning_time).do(threaded,record_stream, "sunday_morning", svc.url,svc.status_url, svc.audio_dir, svc.transcription_dir)
-            print(f"Scheduled {svc.name} sunday_morning at {svc.morning_time} -> {output_dir_for_svc}")
-            logger.info(f"Scheduled {svc.name} sunday_morning at {svc.morning_time} -> {output_dir_for_svc}")
 
-        if svc.evening_time and svc.evening_time != "N/A":
-            safe_name = svc.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
-            output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
-            os.makedirs(output_dir_for_svc, exist_ok=True)
-            schedule.every().sunday.at(svc.evening_time).do(threaded,record_stream, "sunday_evening", svc.url,svc.status_url, svc.audio_dir, svc.transcription_dir)
-            print(f"Scheduled {svc.name} sunday_evening at {svc.evening_time} -> {output_dir_for_svc}")
-            logger.info(f"Scheduled {svc.name} sunday_evening at {svc.evening_time} -> {output_dir_for_svc}")
 
-    print(schedule.get_jobs())
-    logger.info(f"Scheduled jobs: {schedule.get_jobs()}")
-    print(STREAM_STATUS_URL)
-    print(f"Using timezone: {TIMEZONE}")
-    print(STREAM_URL)
-
-    print(f"[{datetime.now()}] Scheduler started. Waiting for recording times...")
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
 
 if __name__ == "__main__":
     try:
@@ -401,5 +371,74 @@ if __name__ == "__main__":
         os.makedirs(TRANSCRIPTIONS_DIR, exist_ok=True)
     except Exception as e:
         logger.error(f"Error creating transcriptions directory {TRANSCRIPTIONS_DIR}: {e}")
-    schedule_recordings()
     
+    for stream in streams_config.get("streams", []):
+        name = stream.get("name", "Unknown")
+        tz_name = stream.get("timezone", "UTC")
+        stream_tz = pytz.timezone(tz_name)
+
+        full_name = stream.get("full_name", stream.get("name", "Unknown"))
+        safe_name = full_name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
+        output_dir = os.path.join(OUTPUT_DIR, safe_name)
+        transcription_dir = os.path.join("./transcriptions", safe_name)
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(transcription_dir, exist_ok=True)
+
+        morning_dt_object = convert_time(stream.get("sunday_morning_service_time"), stream_tz)
+        sunday_morning_services.append((name, morning_dt_object))
+    
+        evening_dt_object = convert_time(stream.get("sunday_evening_service_time"), stream_tz)
+        sunday_evening_services.append((name, evening_dt_object))
+
+        stream_info = StreamInfo(
+            name=name,
+            url=stream.get("url", ""),
+            status_url=stream.get("status_url", ""),
+            timezone=tz_name,
+            morning_time=morning_dt_object,
+            evening_time=evening_dt_object,
+            audio_dir = output_dir,
+            transcription_dir = transcription_dir,
+            is_last_stream=False
+        )
+        services.append(stream_info)
+
+        if stream_info.morning_time and stream_info.morning_time != "N/A":
+            safe_name = stream_info.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
+
+            output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
+
+            os.makedirs(output_dir_for_svc, exist_ok=True)
+
+            schedule.every().sunday.at(stream_info.morning_time.strftime("%H:%M:%S")).do(threaded,record_stream, "sunday_morning", stream_info.url,stream_info.status_url, stream_info.audio_dir, stream_info.transcription_dir)
+
+            print(f"Scheduled {stream_info.name} sunday_morning at {stream_info.morning_time} -> {output_dir_for_svc}")
+            
+            
+            logger.info(f"Scheduled {stream_info.name} sunday_morning at {stream_info.morning_time} -> {output_dir_for_svc}")
+
+        if stream_info.evening_time and stream_info.evening_time != "N/A":
+            safe_name = stream_info.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
+
+            output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
+
+            os.makedirs(output_dir_for_svc, exist_ok=True)
+
+            schedule.every().sunday.at(stream_info.evening_time.strftime("%H:%M:%S")).do(threaded,record_stream, "sunday_evening", stream_info.url,stream_info.status_url, stream_info.audio_dir, stream_info.transcription_dir)
+
+            print(f"Scheduled {stream_info.name} sunday_evening at {stream_info.evening_time} -> {output_dir_for_svc}")
+            logger.info(f"Scheduled {stream_info.name} sunday_evening at {stream_info.evening_time} -> {output_dir_for_svc}")
+
+
+
+        last_hours.append(evening_dt_object if evening_dt_object != "N/A" else 0)
+        
+
+        print(f"Stream: {name}")
+        print(f"  Timezone: {tz_name}")
+        print(f"  Sunday Morning Service (your time): {morning_dt_object}")
+        print(f"  Sunday Evening Service (your time): {evening_dt_object}")
+        print()
+
+    last_recording_starts = max(last_hours)
+    print(f"max last hours;  {max(last_hours)}")
