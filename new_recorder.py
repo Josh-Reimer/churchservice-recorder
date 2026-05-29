@@ -224,11 +224,10 @@ def record_stream(service_type, url,status_url, output_dir, transcription_dir):
     logger.info(f"Stream stopped. Ending recording of {output_file}.")
     send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
     try:
-        #transcribe_audio(output_file, transcription_dir)
-        transcription_queue.put([output_file,transcription_dir])
+        transcription_queue.put([output_file, transcription_dir])
+        logger.info(f"Queued {output_file} for transcription.")
     except Exception as e:
-        logger.error(f"Error during transcription: {e}")
-    logger.info(f"Transcription completed for {output_file}.")
+        logger.error(f"Error queuing transcription for {output_file}: {e}")
 
     if service_type == "sunday_morning":    # After the Sunday morning recording ends, start checking for stream again because i guess they pause the stream for sunday school
         Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Sunday morning recording finished. Starting next recording after sunday school")).start()
@@ -256,11 +255,10 @@ def record_stream(service_type, url,status_url, output_dir, transcription_dir):
 
         
         try:
-            #transcribe_audio(output_file, transcription_dir)
-            transcription_queue.put([output_file,transcription_dir])
+            transcription_queue.put([output_file, transcription_dir])
+            logger.info(f"Queued {output_file} for transcription.")
         except Exception as e:
-            logger.error(f"Error during transcription: {e}")
-        logger.info(f"Transcription completed for {output_file}.")
+            logger.error(f"Error queuing transcription for {output_file}: {e}")
     
 def run_ffmpeg(name, url, output_path, output_format="mp3"):
     """Run an FFmpeg process and return the process handle."""
@@ -290,52 +288,68 @@ def gpu_transcribe_worker():
     import gc
     import torch
 
-    '''
-    todo:
-    use python queue
-    loop through every service in services and transcribe each audio file one at a time after the last_recording_ending is finished to avoid gpu overload
-    keep the model loaded until the last transcription is done
-    
-    '''
-    while True:
-        audio_file_path = transcription_queue.get()[0]
-        
-        if audio_file_path is None:
-            break
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info(f"Loading Whisper model on {device}")
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        logger.info(f"Loading Whisper model on {device}")
-        try:
-            model = whisper.load_model("large", device=device)
-            # use fp16 on CUDA to reduce memory & speed up
-            result = model.transcribe(audio_file_path, fp16=(device == "cuda"))
-            text = result.get("text", "")
-            print(text)
+    # Load the model once and keep it resident for all queued files.
+    # This avoids reloading (minutes of overhead) between recordings.
+    try:
+        # Use the local model file bundled in the image (COPY models models in Dockerfile).
+        # This avoids a ~3 GB download on every container start.
+        local_model_path = "/app/models/large-v3.pt"
+        model_name_or_path = local_model_path if os.path.exists(local_model_path) else "large-v3"
+        model = whisper.load_model(model_name_or_path, device=device)
+    except Exception as e:
+        logger.error(f"Failed to load Whisper model: {e}")
+        return
 
-            transcription_text_file = os.path.join(
-                transcription_queue.get()[1], os.path.basename(audio_file_path).replace(".mp3", ".txt")
-            )
-            with open(transcription_text_file, "w", encoding="utf-8") as f:
-                f.write(text)
+    try:
+        while True:
+            # Fetch the [audio_file_path, transcription_dir] pair as a single item.
+            # Bug fix: previously called queue.get() twice, causing a deadlock / wrong dir.
+            item = transcription_queue.get()
+            if item is None:
+                logger.info("Transcription worker received stop signal. Exiting.")
+                break
 
-            send_telegram_file(
-                TELEGRAM_BOT_TOKEN,
-                TELEGRAM_CHAT_ID,
-                transcription_text_file,
-                caption=f"Transcription finished: {transcription_text_file}"
-            )
+            audio_file_path, transcription_dir = item[0], item[1]
+            logger.info(f"Transcribing {audio_file_path} → {transcription_dir}")
 
-        except Exception as e:
-            logger.error(f"Transcription error for {audio_file_path}: {e}")
-            raise
-        finally:
             try:
-                del model
-                if device == "cuda":
-                    torch.cuda.empty_cache()
-            except Exception:
-                pass
-            gc.collect()
+                # use fp16 on CUDA to reduce memory & speed up
+                result = model.transcribe(audio_file_path, fp16=(device == "cuda"))
+                text = result.get("text", "")
+                print(text)
+
+                transcription_text_file = os.path.join(
+                    transcription_dir,
+                    os.path.basename(audio_file_path).replace(".mp3", ".txt")
+                )
+                with open(transcription_text_file, "w", encoding="utf-8") as f:
+                    f.write(text)
+
+                logger.info(f"Transcription saved to {transcription_text_file}")
+                send_telegram_file(
+                    TELEGRAM_BOT_TOKEN,
+                    TELEGRAM_CHAT_ID,
+                    transcription_text_file,
+                    caption=f"Transcription finished: {transcription_text_file}"
+                )
+
+            except Exception as e:
+                logger.error(f"Transcription error for {audio_file_path}: {e}")
+
+            finally:
+                transcription_queue.task_done()
+    finally:
+        # Clean up GPU memory when the worker exits for any reason.
+        try:
+            del model
+            if device == "cuda":
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+        gc.collect()
 
 
 
@@ -353,11 +367,11 @@ def threaded(job_func, *args):
     executor.submit(job_func, *args)
 
 def schedule_transcriptions():
-    #needs work
-    """Schedule transcriptions after last recording ends."""
-    print(last_recording_starts)
-    worker_thread = Thread(target=gpu_transcribe_worker,daemon = True)
+    """Start the background transcription worker thread."""
+    worker_thread = Thread(target=gpu_transcribe_worker, daemon=True)
     worker_thread.start()
+    logger.info("Transcription worker thread started.")
+    return worker_thread
 
 
 
@@ -442,3 +456,12 @@ if __name__ == "__main__":
 
     last_recording_starts = max(last_hours)
     print(f"max last hours;  {max(last_hours)}")
+
+    # Start the transcription worker so queued files are processed as they arrive.
+    schedule_transcriptions()
+
+    logger.info("Entering schedule loop. Waiting for Sunday services...")
+    print("Recorder running. Waiting for scheduled services (Ctrl+C to stop).")
+    while True:
+        schedule.run_pending()
+        time.sleep(1)

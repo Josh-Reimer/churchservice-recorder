@@ -28,20 +28,19 @@ COPY requirements.txt .
 COPY --chown=app:app webserver.py .
 COPY --chown=app:app templates templates
 COPY appicon.png .
-COPY /config/streams.yml config/streams.yml
+COPY --chown=app:app config config
 
 # Install Python dependencies
-RUN pip install --user --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY --chown=app:app new_recorder.py .
-COPY config config
 # Create directories for recordings and transcriptions
 RUN mkdir -p /app/recordings /app/transcriptions
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:5000/health', timeout=5)" || exit 1
+    CMD python -c "import requests; requests.get('http://localhost:5003/health', timeout=5)" || exit 1
 
 # Default command
 CMD ["python", "new_recorder.py"]
