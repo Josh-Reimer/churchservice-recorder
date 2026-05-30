@@ -10,7 +10,6 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import yaml
 from concurrent.futures import ThreadPoolExecutor
-import subprocess
 from threading import Thread
 import atexit
 import psutil
@@ -19,50 +18,62 @@ import queue
 with open("config/streams.yml", "r") as f:
     streams_config = yaml.safe_load(f)
 
-# Load environment timezone (fallback: UTC)
 load_dotenv()
 TIMEZONE = os.getenv("TIMEZONE", "UTC")
 local_tz = pytz.timezone(TIMEZONE)
+os.environ["TZ"] = TIMEZONE
+time.tzset()
 
 print("Schedules from streams.yml:")
 print(f"Local timezone: {TIMEZONE}\n")
 
-def convert_time(t, stream_tz):
+def now_local():
+    return datetime.now(local_tz)
+
+
+def convert_time(t, stream_tz, service_date=None):
     if not t or t.strip().upper() == "N/A":
-        return "N/A"
+        return None
     dt = datetime.strptime(t, "%H:%M")
-    localized = stream_tz.localize(datetime.combine(datetime.now().date(), dt.time()))
+    service_date = service_date or datetime.now(stream_tz).date()
+    naive_service_time = datetime.combine(service_date, dt.time())
+    try:
+        localized = stream_tz.localize(naive_service_time, is_dst=None)
+    except pytz.NonExistentTimeError:
+        localized = stream_tz.localize(naive_service_time + timedelta(hours=1), is_dst=True)
+    except pytz.AmbiguousTimeError:
+        localized = stream_tz.localize(naive_service_time, is_dst=False)
     return localized.astimezone(local_tz)
 
-sunday_morning_services = []
-sunday_evening_services = []
 services = []
-
-last_recording_ending = None   # should actually be the time the last recording ends, not the config time ending
-last_hours = []
 class StreamInfo:
-    def __init__(self, name, url,status_url, timezone, morning_time, evening_time, audio_dir, transcription_dir, is_last_stream):
+    def __init__(self, name, url, status_url, timezone, stream_tz, morning_time_text, evening_time_text, morning_time, evening_time, audio_dir, transcription_dir, sunday_school_break=False):
         self.name = name
         self.url = url
         self.status_url = status_url
         self.timezone = timezone
+        self.stream_tz = stream_tz
+        self.morning_time_text = morning_time_text
+        self.evening_time_text = evening_time_text
         self.morning_time = morning_time
         self.evening_time = evening_time
         self.audio_dir = audio_dir
         self.transcription_dir = transcription_dir
-        self.is_last_stream = is_last_stream
+        self.sunday_school_break = sunday_school_break
+        self.last_fired = {}  # service_type -> date last fired
        
 
 OUTPUT_DIR = "./recordings"
 TRANSCRIPTIONS_DIR = "./transcriptions"
 transcription_queue = queue.Queue(maxsize=0)
+_transcription_worker = None
 
 # Create timed rotating handler
 handler = TimedRotatingFileHandler(
     'app.log',
     when='D',     # Rotate at midnight
     interval=14,          # Every 14 days
-    backupCount=365,       # Keep 365 days worth
+    backupCount=26,       # Keep about 365 days worth at a 14-day interval
     atTime=None,         # At midnight (default)
     utc=False           # Use local time
 )
@@ -75,20 +86,18 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
 
-logger.info("This will rotate daily at midnight")
-
-load_dotenv()
-TIMEZONE = os.getenv("TIMEZONE")
-LOCAL_TZ = pytz.timezone(TIMEZONE)  # Replace with your actual timezone
-os.environ["TZ"] = f"{TIMEZONE}"  # Set your timezone here
-time.tzset()
-#STREAM_URL = "http://localhost:8000/dublab"
-STREAM_URL = os.getenv("STREAM_URL")
-STREAM_STATUS_URL = os.getenv("STREAM_STATUS_URL")
+logger.info("This will rotate every 14 days at midnight")
 CHECK_INTERVAL = 30  # seconds
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+TELEGRAM_ENABLED = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+if not TELEGRAM_ENABLED:
+    print("WARNING: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not set — Telegram notifications disabled.")
+    logger.warning("Telegram notifications disabled: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID missing.")
 CHECK_TIMEOUT = 90 # minutes
+MAX_OFFLINE_POLLS = 3  # consecutive offline/error polls before treating stream as ended
+SERVICE_TRIGGER_WINDOW = timedelta(seconds=max(60, CHECK_INTERVAL * 2))
+_executor = ThreadPoolExecutor(max_workers=16)
 
 def stream_available(status_url):
     """Check stream status from external API and print status."""
@@ -105,17 +114,13 @@ def stream_available(status_url):
             print(f"Status message: {data.get('message')}")
             logger.warning(f"This system is {round(data.get('percentage', 0))}% full. Status message: {data.get('message')}")
         if data.get("status") == 1:
-            print("Stream is online.")
-            logger.info("Stream is online.")
             return True
         else:
-            print("Stream is offline.")
-            logger.info("Stream is offline.")
             return False
     except requests.RequestException as e:
         print(f"Error checking stream status: {e}")
-        logger.error(f"Error checking stream status: {e}")
-        return False
+        logger.warning(f"Status check failed (treating as unknown): {e}")
+        return None
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str) -> dict:
     """
@@ -144,8 +149,9 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str) -> dict:
         try:
             print("Telegram response:", response.text)
             logger.error(f"Telegram API said: {response.text}")
-        except:
-            print("No response text from Telegram.")
+        except Exception:
+            logger.error(f"Telegram send failed (no response): {e}")
+            print(f"No response text from Telegram. Error: {e}")
         raise
 
 
@@ -183,82 +189,134 @@ def send_telegram_file(bot_token: str, chat_id: str, file_path: str, caption: st
 #send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Church Service Recorder started.")
 
 
-def record_stream(service_type, url,status_url, output_dir, transcription_dir):
-    """Record the stream until it becomes unavailable."""
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
-    output_file = f"{output_dir}/recording_{timestamp}.mp3"
+def stop_process(process):
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
 
-    print(f"[{datetime.now()}] Waiting for stream availability...")
+
+def recording_timestamp():
+    return now_local().strftime("%Y-%m-%d_%H-%M")
+
+
+def record_stream(service_type, url, status_url, output_dir, transcription_dir, has_sunday_school=False):
+    """Record the stream until it becomes unavailable."""
+    print(f"[{now_local()}] Waiting for stream availability...")
     logger.info(f"Waiting for stream availability for {service_type}")
-    total_time = 0
-    while not stream_available(status_url):
-        print(f"[{datetime.now()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
-        total_time += CHECK_INTERVAL
-        logger.info(f"Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
-        if total_time >= CHECK_TIMEOUT * 60:
-            print(f"[{datetime.now()}] Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")
-            logger.warning(f"Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")
-            Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")).start()
-            return
-        
+    offline_seconds = 0
+    while True:
+        available = stream_available(status_url)
+        if available is True:
+            break
+        elif available is False:
+            offline_seconds += CHECK_INTERVAL
+            print(f"[{now_local()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
+            logger.info(f"Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
+            if offline_seconds >= CHECK_TIMEOUT * 60:
+                print(f"[{now_local()}] Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")
+                logger.warning(f"Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")
+                if TELEGRAM_ENABLED:
+                    Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")).start()
+                return
+        else:
+            logger.warning(f"Status check failed for {status_url}, retrying in {CHECK_INTERVAL} seconds...")
         time.sleep(CHECK_INTERVAL)
 
-    print(f"[{datetime.now()}] Stream online! Starting recording to {output_file}")
+    timestamp = recording_timestamp()
+    output_file = f"{output_dir}/recording_{timestamp}.mp3"
+    print(f"[{now_local()}] Stream online! Starting recording to {output_file}")
     logger.info(f"Stream online! Starting recording to {output_file}")
-    Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Recording started at {timestamp}.")).start()
-    # Run ffmpeg until the stream drops
-    process_main = run_ffmpeg(service_type, url, output_file.replace(".mp3",""), "mp3")
+    try:
+        process_main = run_ffmpeg(service_type, url, os.path.splitext(output_file)[0], "mp3")
+    except Exception as e:
+        logger.error(f"FAILED TO START RECORDING for {service_type} ({url}): {e}", exc_info=e)
+        print(f"[{now_local()}] ERROR: ffmpeg failed to start for {service_type} — recording aborted. See app.log for details.")
+        return
     logger.info(f"Started ffmpeg process with PID {process_main.pid} for recording.")
+    if TELEGRAM_ENABLED:
+        Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Recording started at {timestamp}.")).start()
     # Monitor stream; stop when unavailable
 
-    while stream_available(status_url):
+    consecutive_offline = 0
+    while True:
+        available = stream_available(status_url)
+        if available is True:
+            consecutive_offline = 0
+        elif available is False:
+            consecutive_offline += 1
+            if consecutive_offline >= MAX_OFFLINE_POLLS:
+                break
+        # None (error): keep recording, don't penalise consecutive count
         time.sleep(CHECK_INTERVAL)
 
-    print(f"[{datetime.now()}] Stream stopped. Ending recording.")
-    process_main.terminate()
-    try:
-        process_main.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process_main.kill()
+    print(f"[{now_local()}] Stream stopped. Ending recording.")
+    stop_process(process_main)
 
     logger.info(f"Stream stopped. Ending recording of {output_file}.")
-    send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
-    try:
+    if TELEGRAM_ENABLED:
+        send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
+    if _transcription_worker and _transcription_worker.is_alive():
         transcription_queue.put([output_file, transcription_dir])
         logger.info(f"Queued {output_file} for transcription.")
-    except Exception as e:
-        logger.error(f"Error queuing transcription for {output_file}: {e}")
+    else:
+        logger.error(f"Transcription worker is not running — {output_file} will NOT be transcribed.")
 
-    if service_type == "sunday_morning":    # After the Sunday morning recording ends, start checking for stream again because i guess they pause the stream for sunday school
-        Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Sunday morning recording finished. Starting next recording after sunday school")).start()
-        while not stream_available(status_url):
-            print(f"[{datetime.now()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
+    if service_type == "sunday_morning" and has_sunday_school:
+        if TELEGRAM_ENABLED:
+            Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Sunday morning recording finished. Starting next recording after sunday school")).start()
+        offline_seconds = 0
+        while True:
+            available = stream_available(status_url)
+            if available is True:
+                break
+            elif available is False:
+                offline_seconds += CHECK_INTERVAL
+                print(f"[{now_local()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
+                logger.info(f"Stream offline after Sunday morning. Checking again in {CHECK_INTERVAL} seconds...")
+                if offline_seconds >= CHECK_TIMEOUT * 60:
+                    print(f"[{now_local()}] Stream did not return within {CHECK_TIMEOUT} minutes. Exiting.")
+                    logger.warning(f"Stream did not return within {CHECK_TIMEOUT} minutes after Sunday morning. Exiting.")
+                    if TELEGRAM_ENABLED:
+                        Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Stream did not return within {CHECK_TIMEOUT} minutes after Sunday morning. Exiting.")).start()
+                    return
+            else:
+                logger.warning(f"Status check failed for {status_url}, retrying in {CHECK_INTERVAL} seconds...")
             time.sleep(CHECK_INTERVAL)
 
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+        timestamp = recording_timestamp()
         output_file = f"{output_dir}/recording_{timestamp}.mp3"
         
-        # Run ffmpeg until the stream drops
-        process_sunday_school = run_ffmpeg(service_type, url, output_file.replace(".mp3",""), "mp3")
-        logger.info(f"Started ffmpeg process with PID {process_sunday_school.pid} for recording.")
-        while stream_available(status_url):
-            time.sleep(CHECK_INTERVAL)
-        print(f"[{datetime.now()}] Stream stopped. Ending recording.")
-        logger.info(f"Stream stopped. Ending recording of {output_file}.")
-        send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
-        if service_type == "sunday_morning" and 'process_sunday_school' in locals():
-            process_sunday_school.terminate()
-            try:
-                process_sunday_school.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process_sunday_school.kill()
-
-        
         try:
+            process_sunday_school = run_ffmpeg(service_type, url, os.path.splitext(output_file)[0], "mp3")
+        except Exception as e:
+            logger.error(f"FAILED TO START SUNDAY SCHOOL RECORDING for {service_type} ({url}): {e}", exc_info=e)
+            print(f"[{now_local()}] ERROR: ffmpeg failed to start for sunday school — recording aborted. See app.log for details.")
+            return
+        logger.info(f"Started ffmpeg process with PID {process_sunday_school.pid} for recording.")
+        consecutive_offline = 0
+        while True:
+            available = stream_available(status_url)
+            if available is True:
+                consecutive_offline = 0
+            elif available is False:
+                consecutive_offline += 1
+                if consecutive_offline >= MAX_OFFLINE_POLLS:
+                    break
+            # None (error): keep recording, don't penalise consecutive count
+            time.sleep(CHECK_INTERVAL)
+        print(f"[{now_local()}] Stream stopped. Ending recording.")
+        stop_process(process_sunday_school)
+        logger.info(f"Stream stopped. Ending recording of {output_file}.")
+        if TELEGRAM_ENABLED:
+            send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
+
+        if _transcription_worker and _transcription_worker.is_alive():
             transcription_queue.put([output_file, transcription_dir])
             logger.info(f"Queued {output_file} for transcription.")
-        except Exception as e:
-            logger.error(f"Error queuing transcription for {output_file}: {e}")
+        else:
+            logger.error(f"Transcription worker is not running — {output_file} will NOT be transcribed.")
     
 def run_ffmpeg(name, url, output_path, output_format="mp3"):
     """Run an FFmpeg process and return the process handle."""
@@ -329,12 +387,13 @@ def gpu_transcribe_worker():
                     f.write(text)
 
                 logger.info(f"Transcription saved to {transcription_text_file}")
-                send_telegram_file(
-                    TELEGRAM_BOT_TOKEN,
-                    TELEGRAM_CHAT_ID,
-                    transcription_text_file,
-                    caption=f"Transcription finished: {transcription_text_file}"
-                )
+                if TELEGRAM_ENABLED:
+                    send_telegram_file(
+                        TELEGRAM_BOT_TOKEN,
+                        TELEGRAM_CHAT_ID,
+                        transcription_text_file,
+                        caption=f"Transcription finished: {transcription_text_file}"
+                    )
 
             except Exception as e:
                 logger.error(f"Transcription error for {audio_file_path}: {e}")
@@ -354,24 +413,92 @@ def gpu_transcribe_worker():
 
 
 def kill_ffmpeg_children():
-    for proc in psutil.process_iter(['pid', 'name']):
-        if 'ffmpeg' in proc.info['name']:
-            try:
-                proc.terminate()
-            except psutil.NoSuchProcess:
-                pass
+    try:
+        processes = psutil.process_iter(['pid', 'name'])
+        for proc in processes:
+            if 'ffmpeg' in (proc.info.get('name') or ''):
+                try:
+                    proc.terminate()
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    pass
+    except (psutil.Error, PermissionError):
+        logger.warning("Unable to scan for ffmpeg child processes during shutdown.")
 
 atexit.register(kill_ffmpeg_children)
 def threaded(job_func, *args):
-    executor = ThreadPoolExecutor(max_workers=8)
-    executor.submit(job_func, *args)
+    future = _executor.submit(job_func, *args)
+    def _on_done(f):
+        if f.cancelled():
+            logger.warning(f"Recording job {job_func.__name__} was cancelled before it could run.")
+            return
+        exc = f.exception()
+        if exc:
+            logger.error(f"Uncaught exception in {job_func.__name__}: {exc}", exc_info=exc)
+    future.add_done_callback(_on_done)
 
 def schedule_transcriptions():
     """Start the background transcription worker thread."""
-    worker_thread = Thread(target=gpu_transcribe_worker, daemon=True)
-    worker_thread.start()
+    global _transcription_worker
+    _transcription_worker = Thread(target=gpu_transcribe_worker, daemon=True)
+    _transcription_worker.start()
     logger.info("Transcription worker thread started.")
-    return worker_thread
+    return _transcription_worker
+
+
+def service_time_for_today(stream_info, service_type, today_in_stream_tz):
+    time_text = (
+        stream_info.morning_time_text
+        if service_type == "sunday_morning"
+        else stream_info.evening_time_text
+    )
+    return convert_time(time_text, stream_info.stream_tz, today_in_stream_tz)
+
+
+def maybe_start_service(stream_info, service_type, scheduled_time, current_time):
+    if scheduled_time is None:
+        return
+
+    service_date = scheduled_time.date()
+    if stream_info.last_fired.get(service_type) == service_date:
+        return
+
+    if scheduled_time <= current_time < scheduled_time + SERVICE_TRIGGER_WINDOW:
+        stream_info.last_fired[service_type] = service_date
+        threaded(
+            record_stream,
+            service_type,
+            stream_info.url,
+            stream_info.status_url,
+            stream_info.audio_dir,
+            stream_info.transcription_dir,
+            stream_info.sunday_school_break,
+        )
+        logger.info(f"Triggered {stream_info.name} {service_type} at {current_time}; scheduled for {scheduled_time}")
+    elif current_time > scheduled_time + SERVICE_TRIGGER_WINDOW:
+        logger.warning(f"Missed trigger window for {stream_info.name} {service_type} scheduled at {scheduled_time} — container may have started late.")
+        stream_info.last_fired[service_type] = service_date  # suppress repeat warnings
+
+
+def check_services():
+    current_time = now_local()
+    for stream_info in services:
+        now_in_stream_tz = current_time.astimezone(stream_info.stream_tz)
+        if now_in_stream_tz.weekday() != 6:
+            continue
+
+        service_date = now_in_stream_tz.date()
+        maybe_start_service(
+            stream_info,
+            "sunday_morning",
+            service_time_for_today(stream_info, "sunday_morning", service_date),
+            current_time
+        )
+        maybe_start_service(
+            stream_info,
+            "sunday_evening",
+            service_time_for_today(stream_info, "sunday_evening", service_date),
+            current_time
+        )
 
 
 
@@ -386,7 +513,14 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Error creating transcriptions directory {TRANSCRIPTIONS_DIR}: {e}")
     
+    seen_urls = set()
     for stream in streams_config.get("streams", []):
+        url = stream.get("url", "")
+        if url in seen_urls:
+            logger.warning(f"Duplicate stream URL '{url}' in streams.yml — skipping.")
+            print(f"WARNING: Duplicate stream URL skipped: {url}")
+            continue
+        seen_urls.add(url)
         name = stream.get("name", "Unknown")
         tz_name = stream.get("timezone", "UTC")
         stream_tz = pytz.timezone(tz_name)
@@ -398,55 +532,52 @@ if __name__ == "__main__":
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(transcription_dir, exist_ok=True)
 
-        morning_dt_object = convert_time(stream.get("sunday_morning_service_time"), stream_tz)
-        sunday_morning_services.append((name, morning_dt_object))
-    
-        evening_dt_object = convert_time(stream.get("sunday_evening_service_time"), stream_tz)
-        sunday_evening_services.append((name, evening_dt_object))
+        morning_time_text = stream.get("sunday_morning_service_time")
+        evening_time_text = stream.get("sunday_evening_service_time")
+        sunday_school_break = stream.get("sunday_school_break", False)
+
+        morning_dt_object = convert_time(morning_time_text, stream_tz)
+        evening_dt_object = convert_time(evening_time_text, stream_tz)
 
         stream_info = StreamInfo(
             name=name,
             url=stream.get("url", ""),
             status_url=stream.get("status_url", ""),
             timezone=tz_name,
+            stream_tz=stream_tz,
+            morning_time_text=morning_time_text,
+            evening_time_text=evening_time_text,
             morning_time=morning_dt_object,
             evening_time=evening_dt_object,
-            audio_dir = output_dir,
-            transcription_dir = transcription_dir,
-            is_last_stream=False
+            audio_dir=output_dir,
+            transcription_dir=transcription_dir,
+            sunday_school_break=sunday_school_break,
         )
         services.append(stream_info)
 
-        if stream_info.morning_time and stream_info.morning_time != "N/A":
+        if stream_info.morning_time is not None:
             safe_name = stream_info.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
 
             output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
 
             os.makedirs(output_dir_for_svc, exist_ok=True)
-
-            schedule.every().sunday.at(stream_info.morning_time.strftime("%H:%M:%S")).do(threaded,record_stream, "sunday_morning", stream_info.url,stream_info.status_url, stream_info.audio_dir, stream_info.transcription_dir)
 
             print(f"Scheduled {stream_info.name} sunday_morning at {stream_info.morning_time} -> {output_dir_for_svc}")
             
             
             logger.info(f"Scheduled {stream_info.name} sunday_morning at {stream_info.morning_time} -> {output_dir_for_svc}")
 
-        if stream_info.evening_time and stream_info.evening_time != "N/A":
+        if stream_info.evening_time is not None:
             safe_name = stream_info.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
 
             output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
 
             os.makedirs(output_dir_for_svc, exist_ok=True)
 
-            schedule.every().sunday.at(stream_info.evening_time.strftime("%H:%M:%S")).do(threaded,record_stream, "sunday_evening", stream_info.url,stream_info.status_url, stream_info.audio_dir, stream_info.transcription_dir)
-
             print(f"Scheduled {stream_info.name} sunday_evening at {stream_info.evening_time} -> {output_dir_for_svc}")
             logger.info(f"Scheduled {stream_info.name} sunday_evening at {stream_info.evening_time} -> {output_dir_for_svc}")
 
 
-
-        last_hours.append(evening_dt_object if evening_dt_object != "N/A" else 0)
-        
 
         print(f"Stream: {name}")
         print(f"  Timezone: {tz_name}")
@@ -454,11 +585,9 @@ if __name__ == "__main__":
         print(f"  Sunday Evening Service (your time): {evening_dt_object}")
         print()
 
-    last_recording_starts = max(last_hours)
-    print(f"max last hours;  {max(last_hours)}")
-
     # Start the transcription worker so queued files are processed as they arrive.
     schedule_transcriptions()
+    schedule.every(CHECK_INTERVAL).seconds.do(check_services)
 
     logger.info("Entering schedule loop. Waiting for Sunday services...")
     print("Recorder running. Waiting for scheduled services (Ctrl+C to stop).")
