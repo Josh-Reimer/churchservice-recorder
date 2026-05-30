@@ -20,21 +20,25 @@ RUN useradd --create-home --shell /bin/bash app \
     && chown -R app:app /app
 USER app
 
-COPY models models
-
-# Copy requirements file first (for better Docker layer caching)
+# Install Python dependencies before copying any app code or model files.
+# This layer is only invalidated when requirements.txt changes, not when
+# source files or the model are updated.
 COPY requirements.txt .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
+# Copy application code (changes frequently — after pip so edits don't
+# bust the pip layer)
+COPY --chown=app:app new_recorder.py .
 COPY --chown=app:app webserver.py .
 COPY --chown=app:app templates templates
-COPY appicon.png .
+COPY --chown=app:app appicon.png .
 COPY --chown=app:app config config
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy the bundled Whisper model last — it's large and rarely changes.
+# Keeping it at the end means code edits don't force a multi-GB re-copy.
+COPY --chown=app:app models models
 
-# Copy application code
-COPY --chown=app:app new_recorder.py .
 # Create directories for recordings and transcriptions
 RUN mkdir -p /app/recordings /app/transcriptions
 
