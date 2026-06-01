@@ -27,6 +27,8 @@ COMMON_TIMEZONES = [
     "America/North_Dakota/Beulah", "UTC",
 ]
 
+DAYS_LIST = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+
 def load_streams():
     with open(CONFIG_FILE, "r") as f:
         return yaml.safe_load(f) or {"streams": []}
@@ -34,6 +36,37 @@ def load_streams():
 def save_streams(data):
     with open(CONFIG_FILE, "w") as f:
         yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+def _normalize_stream(stream):
+    """Ensure stream has a `services` list, migrating legacy sunday_* fields if needed."""
+    if "services" not in stream:
+        morning = stream.get("sunday_morning_service_time")
+        evening = stream.get("sunday_evening_service_time")
+        ssb = stream.get("sunday_school_break", False)
+        stream = dict(stream)
+        stream["services"] = [{"day": "sunday", "morning": morning, "evening": evening,
+                                "sunday_school_break": ssb}] if (morning or evening) else []
+    return stream
+
+def _parse_slots_from_form():
+    count = int(request.form.get("slot_count", "0"))
+    slots = []
+    for i in range(count):
+        day = request.form.get(f"slot_day_{i}", "").strip()
+        if not day:
+            continue
+        morning = request.form.get(f"slot_morning_{i}", "").strip() or None
+        evening = request.form.get(f"slot_evening_{i}", "").strip() or None
+        ssb = request.form.get(f"slot_ssb_{i}") == "on"
+        slot = {"day": day}
+        if morning:
+            slot["morning"] = morning
+        if evening:
+            slot["evening"] = evening
+        if ssb:
+            slot["sunday_school_break"] = True
+        slots.append(slot)
+    return slots
 
 print("Recordings directory contents:", os.listdir(RECORDINGS_FOLDER))
 print("Transcriptions directory contents:", os.listdir(TRANSCRIPTIONS_FOLDER))
@@ -111,7 +144,8 @@ def config_dashboard():
     if not session.get("logged_in"):
         return redirect(url_for("login"))
     data = load_streams()
-    return render_template("config.html", streams=data.get("streams", []), timezones=COMMON_TIMEZONES)
+    streams = [_normalize_stream(s) for s in data.get("streams", [])]
+    return render_template("config.html", streams=streams, timezones=COMMON_TIMEZONES, days=DAYS_LIST)
 
 @app.route("/config/stream/add", methods=["POST"])
 def config_stream_add():
@@ -119,19 +153,18 @@ def config_stream_add():
         abort(403)
     data = load_streams()
     streams = data.get("streams", [])
+    name = request.form.get("name", "").strip()
+    if not name:
+        abort(400)
     new_stream = {
-        "name": request.form.get("name", "").strip(),
+        "name": name,
         "full_name": request.form.get("full_name", "").strip(),
         "url": request.form.get("url", "").strip(),
         "status_url": request.form.get("status_url", "").strip(),
         "timezone": request.form.get("timezone", "UTC").strip(),
-        "sunday_morning_service_time": request.form.get("sunday_morning_service_time", "").strip() or None,
-        "sunday_evening_service_time": request.form.get("sunday_evening_service_time", "").strip() or None,
-        "sunday_school_break": request.form.get("sunday_school_break") == "on",
+        "services": _parse_slots_from_form(),
         "enabled": request.form.get("enabled") == "on",
     }
-    if not new_stream["name"]:
-        abort(400)
     streams.append(new_stream)
     data["streams"] = streams
     save_streams(data)
@@ -145,17 +178,15 @@ def config_stream_edit(idx):
     streams = data.get("streams", [])
     if idx < 0 or idx >= len(streams):
         abort(404)
-    streams[idx].update({
+    streams[idx] = {
         "name": request.form.get("name", "").strip(),
         "full_name": request.form.get("full_name", "").strip(),
         "url": request.form.get("url", "").strip(),
         "status_url": request.form.get("status_url", "").strip(),
         "timezone": request.form.get("timezone", "UTC").strip(),
-        "sunday_morning_service_time": request.form.get("sunday_morning_service_time", "").strip() or None,
-        "sunday_evening_service_time": request.form.get("sunday_evening_service_time", "").strip() or None,
-        "sunday_school_break": request.form.get("sunday_school_break") == "on",
+        "services": _parse_slots_from_form(),
         "enabled": request.form.get("enabled") == "on",
-    })
+    }
     data["streams"] = streams
     save_streams(data)
     return redirect(url_for("config_dashboard"))

@@ -55,23 +55,32 @@ def convert_time(t, stream_tz, service_date=None):
         localized = stream_tz.localize(naive_service_time, is_dst=False)
     return localized.astimezone(local_tz)
 
+DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
 services = []
+
+class ServiceSlot:
+    def __init__(self, day_of_week, morning_time_text, evening_time_text, morning_time, evening_time, sunday_school_break=False):
+        self.day_of_week = day_of_week      # int 0=Mon … 6=Sun
+        self.morning_time_text = morning_time_text
+        self.evening_time_text = evening_time_text
+        self.morning_time = morning_time    # tz-aware datetime in local_tz, or None
+        self.evening_time = evening_time
+        self.sunday_school_break = sunday_school_break
+        self.last_fired = {}                # "morning"/"evening" -> date last fired
+
+
 class StreamInfo:
-    def __init__(self, name, url, status_url, timezone, stream_tz, morning_time_text, evening_time_text, morning_time, evening_time, audio_dir, transcription_dir, sunday_school_break=False, enabled=True):
+    def __init__(self, name, url, status_url, timezone, stream_tz, audio_dir, transcription_dir, slots, enabled=True):
         self.name = name
         self.url = url
         self.status_url = status_url
         self.timezone = timezone
         self.stream_tz = stream_tz
-        self.morning_time_text = morning_time_text
-        self.evening_time_text = evening_time_text
-        self.morning_time = morning_time
-        self.evening_time = evening_time
         self.audio_dir = audio_dir
         self.transcription_dir = transcription_dir
-        self.sunday_school_break = sunday_school_break
+        self.slots = slots      # list[ServiceSlot]
         self.enabled = enabled
-        self.last_fired = {}  # service_type -> date last fired
        
 
 OUTPUT_DIR = "./recordings"
@@ -274,7 +283,7 @@ def record_stream(service_type, url, status_url, output_dir, transcription_dir, 
     else:
         logger.error(f"Transcription worker is not running — {output_file} will NOT be transcribed.")
 
-    if service_type == "sunday_morning" and has_sunday_school:
+    if has_sunday_school:
         if TELEGRAM_ENABLED:
             Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Sunday morning recording finished. Starting next recording after sunday school")).start()
         offline_seconds = 0
@@ -456,38 +465,33 @@ def schedule_transcriptions():
     return _transcription_worker
 
 
-def service_time_for_today(stream_info, service_type, today_in_stream_tz):
-    time_text = (
-        stream_info.morning_time_text
-        if service_type == "sunday_morning"
-        else stream_info.evening_time_text
-    )
-    return convert_time(time_text, stream_info.stream_tz, today_in_stream_tz)
+def service_time_for_slot(slot, stream_tz, service_date, time_of_day):
+    text = slot.morning_time_text if time_of_day == "morning" else slot.evening_time_text
+    return convert_time(text, stream_tz, service_date)
 
 
-def maybe_start_service(stream_info, service_type, scheduled_time, current_time):
+def maybe_start_service(stream_info, slot, time_of_day, scheduled_time, current_time):
     if scheduled_time is None:
         return
-
     service_date = scheduled_time.date()
-    if stream_info.last_fired.get(service_type) == service_date:
+    if slot.last_fired.get(time_of_day) == service_date:
         return
-
+    label = f"{DAYS[slot.day_of_week]}_{time_of_day}"
     if scheduled_time <= current_time < scheduled_time + SERVICE_TRIGGER_WINDOW:
-        stream_info.last_fired[service_type] = service_date
+        slot.last_fired[time_of_day] = service_date
         threaded(
             record_stream,
-            service_type,
+            label,
             stream_info.url,
             stream_info.status_url,
             stream_info.audio_dir,
             stream_info.transcription_dir,
-            stream_info.sunday_school_break,
+            slot.sunday_school_break if time_of_day == "morning" else False,
         )
-        logger.info(f"Triggered {stream_info.name} {service_type} at {current_time}; scheduled for {scheduled_time}")
+        logger.info(f"Triggered {stream_info.name} {label} at {current_time}; scheduled for {scheduled_time}")
     elif current_time > scheduled_time + SERVICE_TRIGGER_WINDOW:
-        logger.warning(f"Missed trigger window for {stream_info.name} {service_type} scheduled at {scheduled_time} — container may have started late.")
-        stream_info.last_fired[service_type] = service_date  # suppress repeat warnings
+        logger.warning(f"Missed trigger window for {stream_info.name} {label} scheduled at {scheduled_time} — container may have started late.")
+        slot.last_fired[time_of_day] = service_date
 
 
 def check_services():
@@ -495,23 +499,17 @@ def check_services():
     for stream_info in services:
         if not stream_info.enabled:
             continue
-        now_in_stream_tz = current_time.astimezone(stream_info.stream_tz)
-        if now_in_stream_tz.weekday() != 6:
-            continue
-
-        service_date = now_in_stream_tz.date()
-        maybe_start_service(
-            stream_info,
-            "sunday_morning",
-            service_time_for_today(stream_info, "sunday_morning", service_date),
-            current_time
-        )
-        maybe_start_service(
-            stream_info,
-            "sunday_evening",
-            service_time_for_today(stream_info, "sunday_evening", service_date),
-            current_time
-        )
+        for slot in stream_info.slots:
+            now_in_stream_tz = current_time.astimezone(stream_info.stream_tz)
+            if now_in_stream_tz.weekday() != slot.day_of_week:
+                continue
+            service_date = now_in_stream_tz.date()
+            maybe_start_service(stream_info, slot, "morning",
+                service_time_for_slot(slot, stream_info.stream_tz, service_date, "morning"),
+                current_time)
+            maybe_start_service(stream_info, slot, "evening",
+                service_time_for_slot(slot, stream_info.stream_tz, service_date, "evening"),
+                current_time)
 
 
 def build_services(config):
@@ -527,7 +525,7 @@ def build_services(config):
         name = stream.get("name", "Unknown")
         tz_name = stream.get("timezone", "UTC")
         stream_tz = pytz.timezone(tz_name)
-        full_name = stream.get("full_name", stream.get("name", "Unknown"))
+        full_name = stream.get("full_name", name)
         safe_name = (
             full_name.lower()
             .replace(" ", "_").replace(",", "").replace(".", "")
@@ -537,29 +535,46 @@ def build_services(config):
         transcription_dir = os.path.join(TRANSCRIPTIONS_DIR, safe_name)
         os.makedirs(output_dir, exist_ok=True)
         os.makedirs(transcription_dir, exist_ok=True)
-        morning_time_text = stream.get("sunday_morning_service_time")
-        evening_time_text = stream.get("sunday_evening_service_time")
-        sunday_school_break = stream.get("sunday_school_break", False)
         enabled = stream.get("enabled", True)
-        morning_dt = convert_time(morning_time_text, stream_tz)
-        evening_dt = convert_time(evening_time_text, stream_tz)
+
+        # Support new `services` list; fall back to legacy sunday_*_service_time fields
+        raw_slots = stream.get("services")
+        if raw_slots is None:
+            morning = stream.get("sunday_morning_service_time")
+            evening = stream.get("sunday_evening_service_time")
+            ssb = stream.get("sunday_school_break", False)
+            raw_slots = [{"day": "sunday", "morning": morning, "evening": evening,
+                          "sunday_school_break": ssb}] if (morning or evening) else []
+
+        slots = []
+        for rs in raw_slots:
+            day_str = str(rs.get("day", "sunday")).lower()
+            dow = DAYS.index(day_str) if day_str in DAYS else 6
+            m_text = rs.get("morning")
+            e_text = rs.get("evening")
+            slots.append(ServiceSlot(
+                day_of_week=dow,
+                morning_time_text=m_text,
+                evening_time_text=e_text,
+                morning_time=convert_time(m_text, stream_tz),
+                evening_time=convert_time(e_text, stream_tz),
+                sunday_school_break=rs.get("sunday_school_break", False),
+            ))
+
         stream_info = StreamInfo(
             name=name,
             url=url,
             status_url=stream.get("status_url", ""),
             timezone=tz_name,
             stream_tz=stream_tz,
-            morning_time_text=morning_time_text,
-            evening_time_text=evening_time_text,
-            morning_time=morning_dt,
-            evening_time=evening_dt,
             audio_dir=output_dir,
             transcription_dir=transcription_dir,
-            sunday_school_break=sunday_school_break,
+            slots=slots,
             enabled=enabled,
         )
         new_services.append(stream_info)
-        logger.info(f"Loaded {name}: morning={morning_dt}, evening={evening_dt}")
+        for slot in slots:
+            logger.info(f"Loaded {name}: {DAYS[slot.day_of_week]} morning={slot.morning_time}, evening={slot.evening_time}")
     return new_services
 
 
@@ -580,7 +595,10 @@ def check_config_reload():
     new_services = build_services(config)
     for s in new_services:
         if s.name in old_by_name:
-            s.last_fired = old_by_name[s.name].last_fired
+            old_slots_by_dow = {slot.day_of_week: slot for slot in old_by_name[s.name].slots}
+            for slot in s.slots:
+                if slot.day_of_week in old_slots_by_dow:
+                    slot.last_fired = old_slots_by_dow[slot.day_of_week].last_fired
     services = new_services
     logger.info(f"Config reloaded — {len(services)} streams active.")
 
@@ -601,7 +619,8 @@ if __name__ == "__main__":
 
     print(f"Loaded {len(services)} streams:")
     for s in services:
-        print(f"  {s.name}: morning={s.morning_time}, evening={s.evening_time}")
+        for slot in s.slots:
+            print(f"  {s.name}: {DAYS[slot.day_of_week]} morning={slot.morning_time}, evening={slot.evening_time}")
 
     schedule_transcriptions()
     schedule.every(CHECK_INTERVAL).seconds.do(check_services)

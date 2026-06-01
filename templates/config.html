@@ -122,27 +122,41 @@
                   class="px-3 py-1.5 rounded-lg bg-green-900/60 hover:bg-green-800 text-xs font-medium transition whitespace-nowrap shrink-0">🗺 Map</button>
               </div>
             </div>
-            <div class="field">
-              <label>Morning time (HH:MM)</label>
-              <input type="time" name="sunday_morning_service_time"
-                value="{{ stream.sunday_morning_service_time or '' }}">
+            <div class="field col-span-2">
+              <label>Service schedule</label>
+              <div id="slots-edit-{{ i }}" data-slot-container class="space-y-2">
+                <div class="slots-list space-y-2">
+                  {% for slot in stream.get('services', []) %}
+                  {% set si = loop.index0 %}
+                  <div class="slot-row flex flex-wrap items-end gap-2 p-2 bg-white/5 rounded-lg">
+                    <div class="field mb-0" style="min-width:105px">
+                      <label style="font-size:.65rem">Day</label>
+                      <select data-slot-field="day" name="slot_day_{{ si }}">
+                        {% for d in days %}<option value="{{ d }}"{% if slot.day == d %} selected{% endif %}>{{ d|capitalize }}</option>{% endfor %}
+                      </select>
+                    </div>
+                    <div class="field mb-0" style="min-width:110px">
+                      <label style="font-size:.65rem">Morning</label>
+                      <input type="time" data-slot-field="morning" name="slot_morning_{{ si }}" value="{{ slot.morning or '' }}">
+                    </div>
+                    <div class="field mb-0" style="min-width:110px">
+                      <label style="font-size:.65rem">Evening</label>
+                      <input type="time" data-slot-field="evening" name="slot_evening_{{ si }}" value="{{ slot.evening or '' }}">
+                    </div>
+                    <label class="flex items-center gap-1.5 text-xs cursor-pointer" style="align-self:flex-end;margin-bottom:7px">
+                      <input type="checkbox" data-slot-field="ssb" name="slot_ssb_{{ si }}" class="w-3 h-3" {% if slot.sunday_school_break %}checked{% endif %}> SS break
+                    </label>
+                    <button type="button" onclick="removeSlot(this)" class="text-red-400 hover:text-red-300 text-sm" style="align-self:flex-end;margin-bottom:5px">✕</button>
+                  </div>
+                  {% endfor %}
+                </div>
+                <input type="hidden" class="slot-count-input" name="slot_count" value="{{ stream.get('services', [])|length }}">
+                <button type="button" onclick="addSlot('slots-edit-{{ i }}')" class="text-xs text-green-400 hover:text-green-300 transition mt-1">+ Add service</button>
+              </div>
             </div>
-            <div class="field">
-              <label>Evening time (HH:MM)</label>
-              <input type="time" name="sunday_evening_service_time"
-                value="{{ stream.sunday_evening_service_time or '' }}">
-            </div>
-            <div class="field col-span-2 flex flex-wrap gap-x-5 gap-y-2 mt-1 items-center">
-              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none; letter-spacing:0; font-size:0.8rem; opacity:0.9; margin:0;">
-                <input type="checkbox" name="sunday_school_break" class="w-3.5 h-3.5"
-                  {% if stream.sunday_school_break %}checked{% endif %}>
-                Sunday school break
-              </label>
-              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none; letter-spacing:0; font-size:0.8rem; opacity:0.9; margin:0;">
-                <input type="checkbox" name="enabled" value="on" class="w-3.5 h-3.5"
-                  {% if is_enabled %}checked{% endif %}
-                  >
-                Recording enabled
+            <div class="field col-span-2 mt-1">
+              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none;letter-spacing:0;font-size:0.8rem;opacity:0.9;margin:0">
+                <input type="checkbox" name="enabled" value="on" class="w-3.5 h-3.5" {% if is_enabled %}checked{% endif %}> Recording enabled
               </label>
             </div>
           </div>
@@ -195,22 +209,38 @@
                   class="px-3 py-1.5 rounded-lg bg-green-900/60 hover:bg-green-800 text-xs font-medium transition whitespace-nowrap shrink-0">🗺 Map</button>
               </div>
             </div>
-            <div class="field">
-              <label>Morning time (HH:MM)</label>
-              <input type="time" name="sunday_morning_service_time">
+            <div class="field col-span-2">
+              <label>Service schedule</label>
+              <div id="slots-add" data-slot-container class="space-y-2">
+                <div class="slots-list space-y-2">
+                  <div class="slot-row flex flex-wrap items-end gap-2 p-2 bg-white/5 rounded-lg">
+                    <div class="field mb-0" style="min-width:105px">
+                      <label style="font-size:.65rem">Day</label>
+                      <select data-slot-field="day" name="slot_day_0">
+                        {% for d in days %}<option value="{{ d }}"{% if d == 'sunday' %} selected{% endif %}>{{ d|capitalize }}</option>{% endfor %}
+                      </select>
+                    </div>
+                    <div class="field mb-0" style="min-width:110px">
+                      <label style="font-size:.65rem">Morning</label>
+                      <input type="time" data-slot-field="morning" name="slot_morning_0">
+                    </div>
+                    <div class="field mb-0" style="min-width:110px">
+                      <label style="font-size:.65rem">Evening</label>
+                      <input type="time" data-slot-field="evening" name="slot_evening_0">
+                    </div>
+                    <label class="flex items-center gap-1.5 text-xs cursor-pointer" style="align-self:flex-end;margin-bottom:7px">
+                      <input type="checkbox" data-slot-field="ssb" name="slot_ssb_0" class="w-3 h-3"> SS break
+                    </label>
+                    <button type="button" onclick="removeSlot(this)" class="text-red-400 hover:text-red-300 text-sm" style="align-self:flex-end;margin-bottom:5px">✕</button>
+                  </div>
+                </div>
+                <input type="hidden" class="slot-count-input" name="slot_count" value="1">
+                <button type="button" onclick="addSlot('slots-add')" class="text-xs text-green-400 hover:text-green-300 transition mt-1">+ Add service</button>
+              </div>
             </div>
-            <div class="field">
-              <label>Evening time (HH:MM)</label>
-              <input type="time" name="sunday_evening_service_time">
-            </div>
-            <div class="field col-span-2 flex flex-wrap gap-x-5 gap-y-2 mt-1 items-center">
-              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none; letter-spacing:0; font-size:0.8rem; opacity:0.9; margin:0;">
-                <input type="checkbox" name="sunday_school_break" class="w-3.5 h-3.5">
-                Sunday school break
-              </label>
-              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none; letter-spacing:0; font-size:0.8rem; opacity:0.9; margin:0;">
-                <input type="checkbox" name="enabled" value="on" class="w-3.5 h-3.5" checked>
-                Recording enabled
+            <div class="field col-span-2 mt-1">
+              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none;letter-spacing:0;font-size:0.8rem;opacity:0.9;margin:0">
+                <input type="checkbox" name="enabled" value="on" class="w-3.5 h-3.5" checked> Recording enabled
               </label>
             </div>
           </div>
@@ -390,6 +420,51 @@
         document.getElementById(_activeTzInputId).value = _pendingTz;
       }
       closeTzModal();
+    }
+
+    // ── Service slot management ────────────────────────────────────────────
+    var _allDays = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+
+    function _slotRow(idx, day, morning, evening, ssb) {
+      var opts = _allDays.map(function(d) {
+        return '<option value="' + d + '"' + (d === day ? ' selected' : '') + '>'
+          + d.charAt(0).toUpperCase() + d.slice(1) + '</option>';
+      }).join('');
+      return '<div class="slot-row flex flex-wrap items-end gap-2 p-2 bg-white/5 rounded-lg">'
+        + '<div class="field mb-0" style="min-width:105px"><label style="font-size:.65rem">Day</label>'
+        + '<select data-slot-field="day" name="slot_day_' + idx + '">' + opts + '</select></div>'
+        + '<div class="field mb-0" style="min-width:110px"><label style="font-size:.65rem">Morning</label>'
+        + '<input type="time" data-slot-field="morning" name="slot_morning_' + idx + '" value="' + (morning||'') + '"></div>'
+        + '<div class="field mb-0" style="min-width:110px"><label style="font-size:.65rem">Evening</label>'
+        + '<input type="time" data-slot-field="evening" name="slot_evening_' + idx + '" value="' + (evening||'') + '"></div>'
+        + '<label class="flex items-center gap-1.5 text-xs cursor-pointer" style="align-self:flex-end;margin-bottom:7px">'
+        + '<input type="checkbox" data-slot-field="ssb" name="slot_ssb_' + idx + '" class="w-3 h-3"' + (ssb ? ' checked' : '') + '> SS break</label>'
+        + '<button type="button" onclick="removeSlot(this)" class="text-red-400 hover:text-red-300 text-sm" style="align-self:flex-end;margin-bottom:5px">✕</button>'
+        + '</div>';
+    }
+
+    function addSlot(containerId) {
+      var container = document.getElementById(containerId);
+      var countInput = container.querySelector('.slot-count-input');
+      var idx = parseInt(countInput.value || '0');
+      var div = document.createElement('div');
+      div.innerHTML = _slotRow(idx, 'sunday', '', '', false);
+      container.querySelector('.slots-list').appendChild(div.firstChild);
+      countInput.value = idx + 1;
+    }
+
+    function removeSlot(btn) {
+      var row = btn.closest('.slot-row');
+      var container = row.closest('[data-slot-container]');
+      row.remove();
+      // re-index remaining rows
+      var rows = container.querySelectorAll('.slot-row');
+      rows.forEach(function(r, i) {
+        r.querySelectorAll('[data-slot-field]').forEach(function(el) {
+          el.name = 'slot_' + el.getAttribute('data-slot-field') + '_' + i;
+        });
+      });
+      container.querySelector('.slot-count-input').value = rows.length;
     }
 
     // ── Grain background ───────────────────────────────────────────────────
