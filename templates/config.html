@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" href="{{ url_for('serve_icon') }}" type="image/png" />
+  <title>ByteWorship Config</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tz-lookup/tz.js"></script>
+  <style>
+    @media (prefers-color-scheme: dark) {
+      body { background-color: #051408; color: #fff; }
+      .bg-card { background-color: rgba(255,255,255,0.08); }
+    }
+    @media (prefers-color-scheme: light) {
+      body { background-color: #e7f5e7; color: #1a2e1a; }
+      .bg-card { background-color: rgba(0,0,0,0.06); }
+    }
+    body { background-color: #051408; font-family: 'Segoe UI', sans-serif; margin: 0; overflow-x: hidden; }
+    .background-pattern {
+      position: fixed; inset: 0; z-index: -3;
+      background-image: url("data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGZpbHRlciBpZD0ibm9pc2UiPjxmZVR1cmJ1bGVuY2UgdHlwZT0iZnJhY3RhbE5vaXNlIiBiYXNlRnJlcXVlbmN5PSIxLjIiIG51bU9jdGF2ZXM9IjQiLz48L2ZpbHRlcj48cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgaWQ9InIiIGZpbHRlcj0idXJsKCNub2lzZSkiLz48L3N2Zz4=");
+      background-size: 100px 100px; background-repeat: repeat; background-blend-mode: overlay;
+    }
+    #grainCanvas1, #grainCanvas2 { position: fixed; inset: 0; z-index: -2; pointer-events: none; }
+    #grainCanvas2 { z-index: -1; }
+    .field { margin-bottom: 10px; }
+    .field label { font-size: 0.72rem; opacity: 0.65; display: block; margin-bottom: 3px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .field input, .field select { background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.15); border-radius: 0.5rem; padding: 7px 10px; color: inherit; width: 100%; box-sizing: border-box; font-size: 0.875rem; }
+    .field input:focus, .field select:focus { outline: none; border-color: #3ecf4a; box-shadow: 0 0 0 2px rgba(62,207,74,0.15); }
+    .disabled-card { opacity: 0.45; }
+    .leaflet-container { background: #0d2918; }
+  </style>
+</head>
+<body class="text-white p-6 pb-24">
+  <div class="background-pattern"></div>
+  <canvas id="grainCanvas1"></canvas>
+  <canvas id="grainCanvas2"></canvas>
+
+  <div class="flex justify-center mb-6">
+    <img src="{{ url_for('serve_icon') }}" alt="App Icon" class="w-16 h-16 rounded-2xl shadow-lg object-cover" style="border-radius:18px;" />
+  </div>
+  <h1 class="text-3xl text-center font-bold mb-1">Stream Config</h1>
+  <p class="text-center text-green-400 text-sm mb-8">Changes are picked up by the recorder within 30 seconds.</p>
+
+  <div class="max-w-3xl mx-auto space-y-3">
+
+    {% for stream in streams %}
+    {% set i = loop.index0 %}
+    {% set is_enabled = stream.get('enabled', true) %}
+    <div class="bg-card backdrop-blur-sm rounded-xl shadow-lg overflow-hidden {{ 'disabled-card' if not is_enabled else '' }}">
+
+      <!-- View row -->
+      <div id="view-{{ i }}" class="p-4">
+        <div class="flex justify-between items-start gap-3">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 flex-wrap">
+              <h2 class="text-base font-semibold leading-tight">{{ stream.full_name or stream.name }}</h2>
+              {% if not is_enabled %}
+              <span class="text-xs px-2 py-0.5 rounded-full bg-red-900/60 text-red-300 font-medium">DISABLED</span>
+              {% endif %}
+            </div>
+            <p class="text-xs text-green-400 mt-0.5">{{ stream.name }}</p>
+            <div class="mt-1.5 text-sm text-green-100 flex flex-wrap gap-x-4 gap-y-0.5">
+              <span>{{ stream.timezone }}</span>
+              <span>☀ {{ stream.sunday_morning_service_time or '—' }}</span>
+              <span>🌙 {{ stream.sunday_evening_service_time or '—' }}</span>
+              {% if stream.sunday_school_break %}<span class="text-yellow-300 text-xs">SS break</span>{% endif %}
+            </div>
+          </div>
+          <div class="flex gap-1.5 shrink-0 flex-wrap justify-end">
+            <!-- Enable/disable toggle -->
+            <form method="post" action="{{ url_for('config_stream_toggle', idx=i) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit"
+                class="px-2.5 py-1.5 rounded-lg text-xs font-medium transition
+                  {% if is_enabled %}bg-green-900/60 hover:bg-red-900/60 text-green-300 hover:text-red-300{% else %}bg-red-900/60 hover:bg-green-900/60 text-red-300 hover:text-green-300{% endif %}">
+                {{ '● On' if is_enabled else '○ Off' }}
+              </button>
+            </form>
+            <button onclick="toggleEdit({{ i }})"
+              class="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-xs font-medium transition">Edit</button>
+            <form method="post" action="{{ url_for('config_stream_delete', idx=i) }}"
+              onsubmit="return confirm('Delete {{ stream.name }}?')">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit"
+                class="px-2.5 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/70 text-red-400 text-xs font-medium transition">Delete</button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <!-- Edit form (hidden) -->
+      <div id="edit-{{ i }}" class="hidden p-4 pt-3 border-t border-white/10">
+        <form method="post" action="{{ url_for('config_stream_edit', idx=i) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="grid grid-cols-2 gap-x-3">
+            <div class="field">
+              <label>Short name (id)</label>
+              <input type="text" name="name" value="{{ stream.name }}" required>
+            </div>
+            <div class="field">
+              <label>Full name</label>
+              <input type="text" name="full_name" value="{{ stream.full_name or '' }}">
+            </div>
+            <div class="field col-span-2">
+              <label>Stream URL</label>
+              <input type="url" name="url" value="{{ stream.url or '' }}">
+            </div>
+            <div class="field col-span-2">
+              <label>Status URL</label>
+              <input type="url" name="status_url" value="{{ stream.status_url or '' }}">
+            </div>
+            <div class="field col-span-2">
+              <label>Timezone</label>
+              <div class="flex gap-2">
+                <input type="text" name="timezone" id="tz-edit-{{ i }}"
+                  value="{{ stream.timezone }}" list="tz-list" required style="flex:1; width:auto;">
+                <button type="button" onclick="openTzModal('tz-edit-{{ i }}')"
+                  class="px-3 py-1.5 rounded-lg bg-green-900/60 hover:bg-green-800 text-xs font-medium transition whitespace-nowrap shrink-0">🗺 Map</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Morning time (HH:MM)</label>
+              <input type="time" name="sunday_morning_service_time"
+                value="{{ stream.sunday_morning_service_time or '' }}">
+            </div>
+            <div class="field">
+              <label>Evening time (HH:MM)</label>
+              <input type="time" name="sunday_evening_service_time"
+                value="{{ stream.sunday_evening_service_time or '' }}">
+            </div>
+            <div class="field col-span-2 flex flex-wrap gap-x-5 gap-y-2 mt-1 items-center">
+              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none; letter-spacing:0; font-size:0.8rem; opacity:0.9; margin:0;">
+                <input type="checkbox" name="sunday_school_break" class="w-3.5 h-3.5"
+                  {% if stream.sunday_school_break %}checked{% endif %}>
+                Sunday school break
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none; letter-spacing:0; font-size:0.8rem; opacity:0.9; margin:0;">
+                <input type="checkbox" name="enabled" value="on" class="w-3.5 h-3.5"
+                  {% if is_enabled %}checked{% endif %}
+                  >
+                Recording enabled
+              </label>
+            </div>
+          </div>
+          <div class="flex gap-2 mt-3">
+            <button type="submit"
+              class="px-4 py-1.5 rounded-lg bg-green-700 hover:bg-green-600 text-sm font-medium transition">Save</button>
+            <button type="button" onclick="toggleEdit({{ i }})"
+              class="px-4 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm font-medium transition">Cancel</button>
+          </div>
+        </form>
+      </div>
+
+    </div>
+    {% else %}
+    <p class="text-center text-green-400 py-8">No streams configured yet.</p>
+    {% endfor %}
+
+    <!-- Add Stream -->
+    <div class="bg-card backdrop-blur-sm rounded-xl shadow-lg overflow-hidden">
+      <button onclick="toggleAdd()"
+        class="w-full p-4 text-left font-semibold text-green-300 hover:text-white transition flex items-center gap-2 text-sm">
+        <span id="add-arrow" class="text-base">▶</span> Add Stream
+      </button>
+      <div id="add-form" class="hidden p-4 pt-0 border-t border-white/10">
+        <form method="post" action="{{ url_for('config_stream_add') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="grid grid-cols-2 gap-x-3 mt-3">
+            <div class="field">
+              <label>Short name (id)</label>
+              <input type="text" name="name" placeholder="mystream" required>
+            </div>
+            <div class="field">
+              <label>Full name</label>
+              <input type="text" name="full_name" placeholder="My Stream Congregation">
+            </div>
+            <div class="field col-span-2">
+              <label>Stream URL</label>
+              <input type="url" name="url" placeholder="https://...">
+            </div>
+            <div class="field col-span-2">
+              <label>Status URL</label>
+              <input type="url" name="status_url" placeholder="https://api.listentochurch.com/...">
+            </div>
+            <div class="field col-span-2">
+              <label>Timezone</label>
+              <div class="flex gap-2">
+                <input type="text" name="timezone" id="tz-add" value="America/St_Johns"
+                  list="tz-list" required style="flex:1; width:auto;">
+                <button type="button" onclick="openTzModal('tz-add')"
+                  class="px-3 py-1.5 rounded-lg bg-green-900/60 hover:bg-green-800 text-xs font-medium transition whitespace-nowrap shrink-0">🗺 Map</button>
+              </div>
+            </div>
+            <div class="field">
+              <label>Morning time (HH:MM)</label>
+              <input type="time" name="sunday_morning_service_time">
+            </div>
+            <div class="field">
+              <label>Evening time (HH:MM)</label>
+              <input type="time" name="sunday_evening_service_time">
+            </div>
+            <div class="field col-span-2 flex flex-wrap gap-x-5 gap-y-2 mt-1 items-center">
+              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none; letter-spacing:0; font-size:0.8rem; opacity:0.9; margin:0;">
+                <input type="checkbox" name="sunday_school_break" class="w-3.5 h-3.5">
+                Sunday school break
+              </label>
+              <label class="flex items-center gap-2 cursor-pointer" style="text-transform:none; letter-spacing:0; font-size:0.8rem; opacity:0.9; margin:0;">
+                <input type="checkbox" name="enabled" value="on" class="w-3.5 h-3.5" checked>
+                Recording enabled
+              </label>
+            </div>
+          </div>
+          <div class="flex gap-2 mt-3">
+            <button type="submit"
+              class="px-4 py-1.5 rounded-lg bg-green-700 hover:bg-green-600 text-sm font-medium transition">Add Stream</button>
+            <button type="button" onclick="toggleAdd()"
+              class="px-4 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-sm font-medium transition">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+  </div><!-- end stream list -->
+
+  <!-- Timezone datalist fallback -->
+  <datalist id="tz-list">
+    {% for tz in timezones %}<option value="{{ tz }}">{% endfor %}
+  </datalist>
+
+  <!-- Timezone map modal -->
+  <div id="tz-modal" class="fixed inset-0 bg-black/75 flex items-center justify-center z-50 hidden p-4"
+    onclick="if(event.target===this) closeTzModal()">
+    <div class="bg-[#0c2416] rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+      <div class="flex justify-between items-center px-5 py-3 border-b border-white/10">
+        <h3 class="font-semibold">Select Timezone</h3>
+        <button onclick="closeTzModal()" class="text-green-400 hover:text-white text-xl leading-none">✕</button>
+      </div>
+      <div class="p-4">
+        <div id="tz-map" style="height: 360px; border-radius: 0.75rem; overflow: hidden;"></div>
+        <p class="text-xs text-green-500 mt-2">Click on the map to identify the timezone for that location.</p>
+        <div class="mt-2 flex items-center gap-2 min-h-[1.75rem]">
+          <span class="text-xs opacity-60">Selected:</span>
+          <span id="tz-modal-display" class="font-mono text-sm text-white">— click the map —</span>
+        </div>
+      </div>
+      <div class="flex gap-2 justify-end px-4 pb-4">
+        <button onclick="confirmTzSelection()"
+          class="px-4 py-2 bg-green-700 hover:bg-green-600 rounded-lg text-sm font-medium transition">Confirm</button>
+        <button onclick="closeTzModal()"
+          class="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm font-medium transition">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Nav -->
+  <div class="fixed bottom-4 right-4 flex gap-2">
+    <a href="{{ url_for('index') }}"
+      class="bg-green-700 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition text-sm">Recordings</a>
+    <a href="{{ url_for('logout') }}"
+      class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition text-sm">Logout</a>
+  </div>
+
+  <footer class="text-center mt-12 text-xs text-gray-500">&copy; 2025 ByteWorship. All rights reserved.</footer>
+
+  <script>
+    // ── Stream card toggles ─────────────────────────────────────────────────
+    function toggleEdit(idx) {
+      document.getElementById('view-' + idx).classList.toggle('hidden');
+      document.getElementById('edit-' + idx).classList.toggle('hidden');
+    }
+    function toggleAdd() {
+      const form = document.getElementById('add-form');
+      const arrow = document.getElementById('add-arrow');
+      const hidden = form.classList.toggle('hidden');
+      arrow.textContent = hidden ? '▶' : '▼';
+    }
+
+    // ── Timezone map modal ─────────────────────────────────────────────────
+    var _tzMap = null;
+    var _tzMarker = null;
+    var _pendingTz = null;
+    var _activeTzInputId = null;
+
+    // tz-lookup may export under different globals depending on CDN bundling
+    function _lookupTz(lat, lng) {
+      try {
+        if (typeof tzlookup === 'function') return tzlookup(lat, lng);
+        if (typeof tz === 'function') return tz(lat, lng);
+      } catch(e) {}
+      return null;
+    }
+
+    function openTzModal(inputId) {
+      _activeTzInputId = inputId;
+      _pendingTz = null;
+
+      var current = document.getElementById(inputId).value.trim();
+      document.getElementById('tz-modal-display').textContent = current || '— click the map —';
+
+      document.getElementById('tz-modal').classList.remove('hidden');
+
+      if (!_tzMap) {
+        _tzMap = L.map('tz-map', { zoomControl: true }).setView([20, -30], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>',
+          maxZoom: 18
+        }).addTo(_tzMap);
+
+        _tzMap.on('click', function(e) {
+          var lat = e.latlng.lat, lng = e.latlng.lng;
+          var tz = _lookupTz(lat, lng);
+          if (tz) {
+            _pendingTz = tz;
+            document.getElementById('tz-modal-display').textContent = tz;
+          } else {
+            document.getElementById('tz-modal-display').textContent =
+              '(' + lat.toFixed(2) + ', ' + lng.toFixed(2) + ') — lookup unavailable, type manually';
+          }
+          if (_tzMarker) _tzMarker.remove();
+          _tzMarker = L.marker([lat, lng]).addTo(_tzMap);
+        });
+      }
+
+      // Leaflet needs a moment after the container becomes visible
+      setTimeout(function() { _tzMap.invalidateSize(); }, 120);
+    }
+
+    function closeTzModal() {
+      document.getElementById('tz-modal').classList.add('hidden');
+    }
+
+    function confirmTzSelection() {
+      if (_pendingTz && _activeTzInputId) {
+        document.getElementById(_activeTzInputId).value = _pendingTz;
+      }
+      closeTzModal();
+    }
+
+    // ── Grain background ───────────────────────────────────────────────────
+    function setupGrain(canvas, speedX, speedY, alpha, greenStrength) {
+      const ctx = canvas.getContext('2d');
+      function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+      window.addEventListener('resize', resize);
+      resize();
+      let frame = 0;
+      function draw() {
+        const w = canvas.width, h = canvas.height;
+        const imageData = ctx.createImageData(w, h);
+        const buf = imageData.data;
+        for (let i = 0; i < buf.length; i += 4) {
+          const v = Math.random() * 255;
+          buf[i] = v * 0.05; buf[i+1] = v * greenStrength; buf[i+2] = v * 0.05; buf[i+3] = alpha;
+        }
+        ctx.putImageData(imageData, Math.sin(frame/7)*speedX, Math.cos(frame/11)*speedY);
+        frame++;
+        requestAnimationFrame(draw);
+      }
+      draw();
+    }
+    setupGrain(document.getElementById('grainCanvas1'), 0.5, 0.1, 55, 1);
+    setupGrain(document.getElementById('grainCanvas2'), 30, 2.3, 25, 0.9);
+  </script>
+</body>
+</html>

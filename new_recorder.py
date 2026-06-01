@@ -14,27 +14,37 @@ from threading import Thread
 import atexit
 import psutil
 import queue
-# Load config
-with open("config/streams.yml", "r") as f:
-    streams_config = yaml.safe_load(f)
-
 load_dotenv()
 TIMEZONE = os.getenv("TIMEZONE", "UTC")
 local_tz = pytz.timezone(TIMEZONE)
 os.environ["TZ"] = TIMEZONE
 time.tzset()
 
-print("Schedules from streams.yml:")
-print(f"Local timezone: {TIMEZONE}\n")
+CONFIG_FILE = "config/streams.yml"
+_config_mtime = 0.0
+
+print(f"Local timezone: {TIMEZONE}")
+
+
+def _load_config():
+    with open(CONFIG_FILE, "r") as f:
+        return yaml.safe_load(f)
+
+
+def _get_config_mtime():
+    try:
+        return os.path.getmtime(CONFIG_FILE)
+    except OSError:
+        return 0.0
 
 def now_local():
     return datetime.now(local_tz)
 
 
 def convert_time(t, stream_tz, service_date=None):
-    if not t or t.strip().upper() == "N/A":
+    if not t or str(t).strip().upper() == "N/A":
         return None
-    dt = datetime.strptime(t, "%H:%M")
+    dt = datetime.strptime(str(t), "%H:%M")
     service_date = service_date or datetime.now(stream_tz).date()
     naive_service_time = datetime.combine(service_date, dt.time())
     try:
@@ -47,7 +57,7 @@ def convert_time(t, stream_tz, service_date=None):
 
 services = []
 class StreamInfo:
-    def __init__(self, name, url, status_url, timezone, stream_tz, morning_time_text, evening_time_text, morning_time, evening_time, audio_dir, transcription_dir, sunday_school_break=False):
+    def __init__(self, name, url, status_url, timezone, stream_tz, morning_time_text, evening_time_text, morning_time, evening_time, audio_dir, transcription_dir, sunday_school_break=False, enabled=True):
         self.name = name
         self.url = url
         self.status_url = status_url
@@ -60,6 +70,7 @@ class StreamInfo:
         self.audio_dir = audio_dir
         self.transcription_dir = transcription_dir
         self.sunday_school_break = sunday_school_break
+        self.enabled = enabled
         self.last_fired = {}  # service_type -> date last fired
        
 
@@ -482,6 +493,8 @@ def maybe_start_service(stream_info, service_type, scheduled_time, current_time)
 def check_services():
     current_time = now_local()
     for stream_info in services:
+        if not stream_info.enabled:
+            continue
         now_in_stream_tz = current_time.astimezone(stream_info.stream_tz)
         if now_in_stream_tz.weekday() != 6:
             continue
@@ -501,6 +514,75 @@ def check_services():
         )
 
 
+def build_services(config):
+    """Build the services list from a loaded config dict."""
+    new_services = []
+    seen_urls = set()
+    for stream in config.get("streams", []):
+        url = stream.get("url", "")
+        if url in seen_urls:
+            logger.warning(f"Duplicate stream URL '{url}' in streams.yml — skipping.")
+            continue
+        seen_urls.add(url)
+        name = stream.get("name", "Unknown")
+        tz_name = stream.get("timezone", "UTC")
+        stream_tz = pytz.timezone(tz_name)
+        full_name = stream.get("full_name", stream.get("name", "Unknown"))
+        safe_name = (
+            full_name.lower()
+            .replace(" ", "_").replace(",", "").replace(".", "")
+            .replace("cong", "congregation").replace("-", "_")
+        )
+        output_dir = os.path.join(OUTPUT_DIR, safe_name)
+        transcription_dir = os.path.join(TRANSCRIPTIONS_DIR, safe_name)
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(transcription_dir, exist_ok=True)
+        morning_time_text = stream.get("sunday_morning_service_time")
+        evening_time_text = stream.get("sunday_evening_service_time")
+        sunday_school_break = stream.get("sunday_school_break", False)
+        enabled = stream.get("enabled", True)
+        morning_dt = convert_time(morning_time_text, stream_tz)
+        evening_dt = convert_time(evening_time_text, stream_tz)
+        stream_info = StreamInfo(
+            name=name,
+            url=url,
+            status_url=stream.get("status_url", ""),
+            timezone=tz_name,
+            stream_tz=stream_tz,
+            morning_time_text=morning_time_text,
+            evening_time_text=evening_time_text,
+            morning_time=morning_dt,
+            evening_time=evening_dt,
+            audio_dir=output_dir,
+            transcription_dir=transcription_dir,
+            sunday_school_break=sunday_school_break,
+            enabled=enabled,
+        )
+        new_services.append(stream_info)
+        logger.info(f"Loaded {name}: morning={morning_dt}, evening={evening_dt}")
+    return new_services
+
+
+def check_config_reload():
+    """Reload streams.yml if it has changed on disk."""
+    global services, _config_mtime
+    current_mtime = _get_config_mtime()
+    if current_mtime <= _config_mtime:
+        return
+    _config_mtime = current_mtime
+    logger.info("streams.yml changed — reloading config.")
+    try:
+        config = _load_config()
+    except Exception as e:
+        logger.error(f"Config reload failed: {e}")
+        return
+    old_by_name = {s.name: s for s in services}
+    new_services = build_services(config)
+    for s in new_services:
+        if s.name in old_by_name:
+            s.last_fired = old_by_name[s.name].last_fired
+    services = new_services
+    logger.info(f"Config reloaded — {len(services)} streams active.")
 
 
 if __name__ == "__main__":
@@ -513,81 +595,17 @@ if __name__ == "__main__":
     except Exception as e:
         logger.error(f"Error creating transcriptions directory {TRANSCRIPTIONS_DIR}: {e}")
     
-    seen_urls = set()
-    for stream in streams_config.get("streams", []):
-        url = stream.get("url", "")
-        if url in seen_urls:
-            logger.warning(f"Duplicate stream URL '{url}' in streams.yml — skipping.")
-            print(f"WARNING: Duplicate stream URL skipped: {url}")
-            continue
-        seen_urls.add(url)
-        name = stream.get("name", "Unknown")
-        tz_name = stream.get("timezone", "UTC")
-        stream_tz = pytz.timezone(tz_name)
+    config = _load_config()
+    services = build_services(config)
+    _config_mtime = _get_config_mtime()
 
-        full_name = stream.get("full_name", stream.get("name", "Unknown"))
-        safe_name = full_name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
-        output_dir = os.path.join(OUTPUT_DIR, safe_name)
-        transcription_dir = os.path.join("./transcriptions", safe_name)
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(transcription_dir, exist_ok=True)
+    print(f"Loaded {len(services)} streams:")
+    for s in services:
+        print(f"  {s.name}: morning={s.morning_time}, evening={s.evening_time}")
 
-        morning_time_text = stream.get("sunday_morning_service_time")
-        evening_time_text = stream.get("sunday_evening_service_time")
-        sunday_school_break = stream.get("sunday_school_break", False)
-
-        morning_dt_object = convert_time(morning_time_text, stream_tz)
-        evening_dt_object = convert_time(evening_time_text, stream_tz)
-
-        stream_info = StreamInfo(
-            name=name,
-            url=stream.get("url", ""),
-            status_url=stream.get("status_url", ""),
-            timezone=tz_name,
-            stream_tz=stream_tz,
-            morning_time_text=morning_time_text,
-            evening_time_text=evening_time_text,
-            morning_time=morning_dt_object,
-            evening_time=evening_dt_object,
-            audio_dir=output_dir,
-            transcription_dir=transcription_dir,
-            sunday_school_break=sunday_school_break,
-        )
-        services.append(stream_info)
-
-        if stream_info.morning_time is not None:
-            safe_name = stream_info.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
-
-            output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
-
-            os.makedirs(output_dir_for_svc, exist_ok=True)
-
-            print(f"Scheduled {stream_info.name} sunday_morning at {stream_info.morning_time} -> {output_dir_for_svc}")
-            
-            
-            logger.info(f"Scheduled {stream_info.name} sunday_morning at {stream_info.morning_time} -> {output_dir_for_svc}")
-
-        if stream_info.evening_time is not None:
-            safe_name = stream_info.name.lower().replace(" ", "_").replace(",", "").replace(".", "").replace("cong","congregation").replace("-", "_")
-
-            output_dir_for_svc = os.path.join(OUTPUT_DIR, safe_name)
-
-            os.makedirs(output_dir_for_svc, exist_ok=True)
-
-            print(f"Scheduled {stream_info.name} sunday_evening at {stream_info.evening_time} -> {output_dir_for_svc}")
-            logger.info(f"Scheduled {stream_info.name} sunday_evening at {stream_info.evening_time} -> {output_dir_for_svc}")
-
-
-
-        print(f"Stream: {name}")
-        print(f"  Timezone: {tz_name}")
-        print(f"  Sunday Morning Service (your time): {morning_dt_object}")
-        print(f"  Sunday Evening Service (your time): {evening_dt_object}")
-        print()
-
-    # Start the transcription worker so queued files are processed as they arrive.
     schedule_transcriptions()
     schedule.every(CHECK_INTERVAL).seconds.do(check_services)
+    schedule.every(CHECK_INTERVAL).seconds.do(check_config_reload)
 
     logger.info("Entering schedule loop. Waiting for Sunday services...")
     print("Recorder running. Waiting for scheduled services (Ctrl+C to stop).")

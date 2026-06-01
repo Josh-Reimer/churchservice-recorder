@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, send_from_directory, session, abort
 from flask_wtf.csrf import CSRFProtect
 import os
+import yaml
 import mutagen
 from mutagen.mp3 import MP3
 
@@ -16,6 +17,23 @@ PASSWORD = "42"
 
 RECORDINGS_FOLDER = "/app/recordings"
 TRANSCRIPTIONS_FOLDER = "/app/transcriptions"
+CONFIG_FILE = "/app/config/streams.yml"
+
+COMMON_TIMEZONES = [
+    "America/St_Johns", "America/Halifax", "America/New_York",
+    "America/Chicago", "America/Winnipeg", "America/Regina",
+    "America/Denver", "America/Phoenix", "America/Los_Angeles",
+    "America/Mexico_City", "America/Dawson_Creek",
+    "America/North_Dakota/Beulah", "UTC",
+]
+
+def load_streams():
+    with open(CONFIG_FILE, "r") as f:
+        return yaml.safe_load(f) or {"streams": []}
+
+def save_streams(data):
+    with open(CONFIG_FILE, "w") as f:
+        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 print("Recordings directory contents:", os.listdir(RECORDINGS_FOLDER))
 print("Transcriptions directory contents:", os.listdir(TRANSCRIPTIONS_FOLDER))
@@ -87,6 +105,86 @@ def serve_icon():
     if not os.path.exists(icon_path):
         abort(404)
     return send_from_directory(os.getcwd(), "appicon.png")
+
+@app.route("/config")
+def config_dashboard():
+    if not session.get("logged_in"):
+        return redirect(url_for("login"))
+    data = load_streams()
+    return render_template("config.html", streams=data.get("streams", []), timezones=COMMON_TIMEZONES)
+
+@app.route("/config/stream/add", methods=["POST"])
+def config_stream_add():
+    if not session.get("logged_in"):
+        abort(403)
+    data = load_streams()
+    streams = data.get("streams", [])
+    new_stream = {
+        "name": request.form.get("name", "").strip(),
+        "full_name": request.form.get("full_name", "").strip(),
+        "url": request.form.get("url", "").strip(),
+        "status_url": request.form.get("status_url", "").strip(),
+        "timezone": request.form.get("timezone", "UTC").strip(),
+        "sunday_morning_service_time": request.form.get("sunday_morning_service_time", "").strip() or None,
+        "sunday_evening_service_time": request.form.get("sunday_evening_service_time", "").strip() or None,
+        "sunday_school_break": request.form.get("sunday_school_break") == "on",
+        "enabled": request.form.get("enabled") == "on",
+    }
+    if not new_stream["name"]:
+        abort(400)
+    streams.append(new_stream)
+    data["streams"] = streams
+    save_streams(data)
+    return redirect(url_for("config_dashboard"))
+
+@app.route("/config/stream/<int:idx>/edit", methods=["POST"])
+def config_stream_edit(idx):
+    if not session.get("logged_in"):
+        abort(403)
+    data = load_streams()
+    streams = data.get("streams", [])
+    if idx < 0 or idx >= len(streams):
+        abort(404)
+    streams[idx].update({
+        "name": request.form.get("name", "").strip(),
+        "full_name": request.form.get("full_name", "").strip(),
+        "url": request.form.get("url", "").strip(),
+        "status_url": request.form.get("status_url", "").strip(),
+        "timezone": request.form.get("timezone", "UTC").strip(),
+        "sunday_morning_service_time": request.form.get("sunday_morning_service_time", "").strip() or None,
+        "sunday_evening_service_time": request.form.get("sunday_evening_service_time", "").strip() or None,
+        "sunday_school_break": request.form.get("sunday_school_break") == "on",
+        "enabled": request.form.get("enabled") == "on",
+    })
+    data["streams"] = streams
+    save_streams(data)
+    return redirect(url_for("config_dashboard"))
+
+@app.route("/config/stream/<int:idx>/toggle", methods=["POST"])
+def config_stream_toggle(idx):
+    if not session.get("logged_in"):
+        abort(403)
+    data = load_streams()
+    streams = data.get("streams", [])
+    if idx < 0 or idx >= len(streams):
+        abort(404)
+    streams[idx]["enabled"] = not streams[idx].get("enabled", True)
+    data["streams"] = streams
+    save_streams(data)
+    return redirect(url_for("config_dashboard"))
+
+@app.route("/config/stream/<int:idx>/delete", methods=["POST"])
+def config_stream_delete(idx):
+    if not session.get("logged_in"):
+        abort(403)
+    data = load_streams()
+    streams = data.get("streams", [])
+    if idx < 0 or idx >= len(streams):
+        abort(404)
+    streams.pop(idx)
+    data["streams"] = streams
+    save_streams(data)
+    return redirect(url_for("config_dashboard"))
 
 @app.route("/health")
 def healths():
