@@ -240,11 +240,27 @@
         <button onclick="closeTzModal()" class="text-green-400 hover:text-white text-xl leading-none">✕</button>
       </div>
       <div class="p-4">
-        <div id="tz-map" style="height: 360px; border-radius: 0.75rem; overflow: hidden;"></div>
+        <!-- Browser timezone live display -->
+        <div class="flex items-center gap-2 text-xs mb-3 bg-white/5 rounded-lg px-3 py-2">
+          <span class="opacity-50 shrink-0">Your browser:</span>
+          <span id="tz-browser-name" class="font-mono text-green-300"></span>
+          <span class="opacity-30 mx-0.5">—</span>
+          <span id="tz-browser-time" class="font-mono text-white tabular-nums"></span>
+          <span id="tz-browser-offset" class="opacity-50 ml-1"></span>
+        </div>
+        <div id="tz-map" style="height: 310px; border-radius: 0.75rem; overflow: hidden;"></div>
         <p class="text-xs text-green-500 mt-2">Click on the map to identify the timezone for that location.</p>
-        <div class="mt-2 flex items-center gap-2 min-h-[1.75rem]">
-          <span class="text-xs opacity-60">Selected:</span>
-          <span id="tz-modal-display" class="font-mono text-sm text-white">— click the map —</span>
+        <!-- Selected: name + live time + UTC offset -->
+        <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 min-h-[1.75rem]">
+          <div class="flex items-center gap-2">
+            <span class="text-xs opacity-50">Selected:</span>
+            <span id="tz-modal-display" class="font-mono text-sm text-white">— click the map —</span>
+          </div>
+          <div id="tz-selected-info" class="hidden flex items-center gap-2">
+            <span class="opacity-25 select-none">·</span>
+            <span id="tz-modal-time" class="font-mono text-sm text-green-300 tabular-nums"></span>
+            <span id="tz-modal-offset" class="text-xs opacity-50"></span>
+          </div>
         </div>
       </div>
       <div class="flex gap-2 justify-end px-4 pb-4">
@@ -284,8 +300,8 @@
     var _tzMarker = null;
     var _pendingTz = null;
     var _activeTzInputId = null;
+    var _tzTick = null;
 
-    // tz-lookup may export under different globals depending on CDN bundling
     function _lookupTz(lat, lng) {
       try {
         if (typeof tzlookup === 'function') return tzlookup(lat, lng);
@@ -294,14 +310,45 @@
       return null;
     }
 
+    function _currentTime(tzName) {
+      try {
+        return new Date().toLocaleTimeString('en-CA', {
+          timeZone: tzName, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+        });
+      } catch(e) { return ''; }
+    }
+
+    function _utcOffset(tzName) {
+      try {
+        var parts = new Intl.DateTimeFormat('en', {
+          timeZone: tzName, timeZoneName: 'shortOffset'
+        }).formatToParts(new Date());
+        var p = parts.find(function(x) { return x.type === 'timeZoneName'; });
+        return p ? p.value.replace('GMT', 'UTC') : '';
+      } catch(e) { return ''; }
+    }
+
+    function _tickTzDisplay() {
+      var browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      document.getElementById('tz-browser-name').textContent = browserTz;
+      document.getElementById('tz-browser-time').textContent = _currentTime(browserTz);
+      document.getElementById('tz-browser-offset').textContent = _utcOffset(browserTz);
+      if (_pendingTz) {
+        document.getElementById('tz-modal-time').textContent = _currentTime(_pendingTz);
+      }
+    }
+
     function openTzModal(inputId) {
       _activeTzInputId = inputId;
       _pendingTz = null;
 
       var current = document.getElementById(inputId).value.trim();
       document.getElementById('tz-modal-display').textContent = current || '— click the map —';
+      document.getElementById('tz-selected-info').classList.add('hidden');
 
       document.getElementById('tz-modal').classList.remove('hidden');
+      _tickTzDisplay();
+      _tzTick = setInterval(_tickTzDisplay, 1000);
 
       if (!_tzMap) {
         _tzMap = L.map('tz-map', { zoomControl: true }).setView([20, -30], 2);
@@ -312,25 +359,30 @@
 
         _tzMap.on('click', function(e) {
           var lat = e.latlng.lat, lng = e.latlng.lng;
-          var tz = _lookupTz(lat, lng);
-          if (tz) {
-            _pendingTz = tz;
-            document.getElementById('tz-modal-display').textContent = tz;
+          var tzName = _lookupTz(lat, lng);
+          if (tzName) {
+            _pendingTz = tzName;
+            document.getElementById('tz-modal-display').textContent = tzName;
+            document.getElementById('tz-modal-time').textContent = _currentTime(tzName);
+            document.getElementById('tz-modal-offset').textContent = _utcOffset(tzName);
+            document.getElementById('tz-selected-info').classList.remove('hidden');
           } else {
             document.getElementById('tz-modal-display').textContent =
               '(' + lat.toFixed(2) + ', ' + lng.toFixed(2) + ') — lookup unavailable, type manually';
+            document.getElementById('tz-selected-info').classList.add('hidden');
           }
           if (_tzMarker) _tzMarker.remove();
           _tzMarker = L.marker([lat, lng]).addTo(_tzMap);
         });
       }
 
-      // Leaflet needs a moment after the container becomes visible
       setTimeout(function() { _tzMap.invalidateSize(); }, 120);
     }
 
     function closeTzModal() {
       document.getElementById('tz-modal').classList.add('hidden');
+      clearInterval(_tzTick);
+      _tzTick = null;
     }
 
     function confirmTzSelection() {
