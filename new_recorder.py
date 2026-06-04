@@ -595,10 +595,10 @@ def check_config_reload():
     new_services = build_services(config)
     for s in new_services:
         if s.name in old_by_name:
-            old_slots_by_dow = {slot.day_of_week: slot for slot in old_by_name[s.name].slots}
-            for slot in s.slots:
-                if slot.day_of_week in old_slots_by_dow:
-                    slot.last_fired = old_slots_by_dow[slot.day_of_week].last_fired
+            old_slots = old_by_name[s.name].slots
+            for i, slot in enumerate(s.slots):
+                if i < len(old_slots):
+                    slot.last_fired = old_slots[i].last_fired
     services = new_services
     logger.info(f"Config reloaded — {len(services)} streams active.")
 
