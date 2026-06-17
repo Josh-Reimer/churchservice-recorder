@@ -139,8 +139,20 @@ def stream_available(status_url):
             return False
     except requests.RequestException as e:
         print(f"Error checking stream status: {e}")
-        logger.warning(f"Status check failed (treating as unknown): {e}")
+        logger.error(f"Status check failed: {e}")
         return None
+
+def notify_telegram(text: str):
+    """Send a Telegram message if notifications are enabled."""
+    if TELEGRAM_ENABLED:
+        Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, text)).start()
+
+
+def notify_telegram_file(file_path: str, caption: str = ""):
+    """Send a Telegram file if notifications are enabled."""
+    if TELEGRAM_ENABLED:
+        send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, file_path, caption=caption)
+
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str) -> dict:
     """
@@ -221,28 +233,47 @@ def recording_timestamp():
     return now_local().strftime("%Y-%m-%d_%H-%M")
 
 
-def record_stream(service_type, url, status_url, output_dir, transcription_dir, has_sunday_school=False):
-    """Record the stream until it becomes unavailable."""
-    print(f"[{now_local()}] Waiting for stream availability...")
-    logger.info(f"Waiting for stream availability for {service_type}")
+def wait_for_stream_online(status_url, context_label):
+    """Wait for stream to come online, with timeout. Returns True if online, False if timeout."""
     offline_seconds = 0
     while True:
         available = stream_available(status_url)
         if available is True:
-            break
+            return True
         elif available is False:
             offline_seconds += CHECK_INTERVAL
-            print(f"[{now_local()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
-            logger.info(f"Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
+            print(f"[{now_local()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds... ({context_label})")
+            logger.info(f"Stream offline ({context_label}). Checking again in {CHECK_INTERVAL} seconds...")
             if offline_seconds >= CHECK_TIMEOUT * 60:
-                print(f"[{now_local()}] Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")
-                logger.warning(f"Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")
-                if TELEGRAM_ENABLED:
-                    Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting.")).start()
-                return
+                print(f"[{now_local()}] Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting ({context_label}).")
+                logger.warning(f"Stream did not become available within {CHECK_TIMEOUT} minutes ({context_label}). Exiting.")
+                notify_telegram(f"Stream did not become available within {CHECK_TIMEOUT} minutes ({context_label}). Exiting.")
+                return False
         else:
-            logger.warning(f"Status check failed for {status_url}, retrying in {CHECK_INTERVAL} seconds...")
+            logger.warning(f"Status check failed for {status_url} ({context_label}), retrying in {CHECK_INTERVAL} seconds...")
         time.sleep(CHECK_INTERVAL)
+
+
+def monitor_stream_while_recording(status_url, context_label):
+    """Monitor stream status while recording. Returns when stream becomes unavailable."""
+    consecutive_offline = 0
+    while True:
+        available = stream_available(status_url)
+        if available is True:
+            consecutive_offline = 0
+        elif available is False or available is None:
+            consecutive_offline += 1
+            if consecutive_offline >= MAX_OFFLINE_POLLS:
+                break
+        time.sleep(CHECK_INTERVAL)
+
+
+def record_stream(service_type, url, status_url, output_dir, transcription_dir, has_sunday_school=False):
+    """Record the stream until it becomes unavailable."""
+    print(f"[{now_local()}] Waiting for stream availability...")
+    logger.info(f"Waiting for stream availability for {service_type}")
+    if not wait_for_stream_online(status_url, f"initial_{service_type}"):
+        return
 
     timestamp = recording_timestamp()
     output_file = f"{output_dir}/recording_{timestamp}.mp3"
@@ -255,55 +286,20 @@ def record_stream(service_type, url, status_url, output_dir, transcription_dir, 
         print(f"[{now_local()}] ERROR: ffmpeg failed to start for {service_type} — recording aborted. See app.log for details.")
         return
     logger.info(f"Started ffmpeg process with PID {process_main.pid} for recording.")
-    if TELEGRAM_ENABLED:
-        Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Recording started at {timestamp}.")).start()
+    notify_telegram(f"Recording started at {timestamp}.")
     # Monitor stream; stop when unavailable
-
-    consecutive_offline = 0
-    while True:
-        available = stream_available(status_url)
-        if available is True:
-            consecutive_offline = 0
-        elif available is False:
-            consecutive_offline += 1
-            if consecutive_offline >= MAX_OFFLINE_POLLS:
-                break
-        # None (error): keep recording, don't penalise consecutive count
-        time.sleep(CHECK_INTERVAL)
-
+    monitor_stream_while_recording(status_url, f"{service_type}_recording")
     print(f"[{now_local()}] Stream stopped. Ending recording.")
     stop_process(process_main)
 
     logger.info(f"Stream stopped. Ending recording of {output_file}.")
-    if TELEGRAM_ENABLED:
-        send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
-    if _transcription_worker and _transcription_worker.is_alive():
-        transcription_queue.put([output_file, transcription_dir])
-        logger.info(f"Queued {output_file} for transcription.")
-    else:
-        logger.error(f"Transcription worker is not running — {output_file} will NOT be transcribed.")
+    notify_telegram_file(output_file, caption=f"Recording finished: {output_file}")
+    queue_transcription(output_file, transcription_dir)
 
     if has_sunday_school:
-        if TELEGRAM_ENABLED:
-            Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Sunday morning recording finished. Starting next recording after sunday school")).start()
-        offline_seconds = 0
-        while True:
-            available = stream_available(status_url)
-            if available is True:
-                break
-            elif available is False:
-                offline_seconds += CHECK_INTERVAL
-                print(f"[{now_local()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds...")
-                logger.info(f"Stream offline after Sunday morning. Checking again in {CHECK_INTERVAL} seconds...")
-                if offline_seconds >= CHECK_TIMEOUT * 60:
-                    print(f"[{now_local()}] Stream did not return within {CHECK_TIMEOUT} minutes. Exiting.")
-                    logger.warning(f"Stream did not return within {CHECK_TIMEOUT} minutes after Sunday morning. Exiting.")
-                    if TELEGRAM_ENABLED:
-                        Thread(target=send_telegram_message, args=(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, f"Stream did not return within {CHECK_TIMEOUT} minutes after Sunday morning. Exiting.")).start()
-                    return
-            else:
-                logger.warning(f"Status check failed for {status_url}, retrying in {CHECK_INTERVAL} seconds...")
-            time.sleep(CHECK_INTERVAL)
+        notify_telegram("Sunday morning recording finished. Starting next recording after sunday school")
+        if not wait_for_stream_online(status_url, "sunday_school_break"):
+            return
 
         timestamp = recording_timestamp()
         output_file = f"{output_dir}/recording_{timestamp}.mp3"
@@ -315,28 +311,12 @@ def record_stream(service_type, url, status_url, output_dir, transcription_dir, 
             print(f"[{now_local()}] ERROR: ffmpeg failed to start for sunday school — recording aborted. See app.log for details.")
             return
         logger.info(f"Started ffmpeg process with PID {process_sunday_school.pid} for recording.")
-        consecutive_offline = 0
-        while True:
-            available = stream_available(status_url)
-            if available is True:
-                consecutive_offline = 0
-            elif available is False:
-                consecutive_offline += 1
-                if consecutive_offline >= MAX_OFFLINE_POLLS:
-                    break
-            # None (error): keep recording, don't penalise consecutive count
-            time.sleep(CHECK_INTERVAL)
+        monitor_stream_while_recording(status_url, "sunday_school_recording")
         print(f"[{now_local()}] Stream stopped. Ending recording.")
         stop_process(process_sunday_school)
         logger.info(f"Stream stopped. Ending recording of {output_file}.")
-        if TELEGRAM_ENABLED:
-            send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, output_file, caption=f"Recording finished: {output_file}")
-
-        if _transcription_worker and _transcription_worker.is_alive():
-            transcription_queue.put([output_file, transcription_dir])
-            logger.info(f"Queued {output_file} for transcription.")
-        else:
-            logger.error(f"Transcription worker is not running — {output_file} will NOT be transcribed.")
+        notify_telegram_file(output_file, caption=f"Recording finished: {output_file}")
+        queue_transcription(output_file, transcription_dir)
     
 def run_ffmpeg(name, url, output_path, output_format="mp3"):
     """Run an FFmpeg process and return the process handle."""
@@ -385,7 +365,10 @@ def gpu_transcribe_worker():
         while True:
             # Fetch the [audio_file_path, transcription_dir] pair as a single item.
             # Bug fix: previously called queue.get() twice, causing a deadlock / wrong dir.
-            item = transcription_queue.get()
+            try:
+                item = transcription_queue.get(timeout=5)
+            except queue.Empty:
+                continue
             if item is None:
                 logger.info("Transcription worker received stop signal. Exiting.")
                 break
@@ -407,13 +390,7 @@ def gpu_transcribe_worker():
                     f.write(text)
 
                 logger.info(f"Transcription saved to {transcription_text_file}")
-                if TELEGRAM_ENABLED:
-                    send_telegram_file(
-                        TELEGRAM_BOT_TOKEN,
-                        TELEGRAM_CHAT_ID,
-                        transcription_text_file,
-                        caption=f"Transcription finished: {transcription_text_file}"
-                    )
+                notify_telegram_file(transcription_text_file, caption=f"Transcription finished: {transcription_text_file}")
 
             except Exception as e:
                 logger.error(f"Transcription error for {audio_file_path}: {e}")
@@ -445,6 +422,24 @@ def kill_ffmpeg_children():
         logger.warning("Unable to scan for ffmpeg child processes during shutdown.")
 
 atexit.register(kill_ffmpeg_children)
+
+def shutdown_transcription_worker():
+    """Gracefully shut down the transcription worker thread."""
+    global _transcription_worker
+    if _transcription_worker and _transcription_worker.is_alive():
+        try:
+            logger.info("Sending stop signal to transcription worker...")
+            transcription_queue.put(None)
+            _transcription_worker.join(timeout=10)
+            if _transcription_worker.is_alive():
+                logger.warning("Transcription worker did not exit cleanly within 10 seconds.")
+            else:
+                logger.info("Transcription worker shut down cleanly.")
+        except Exception as e:
+            logger.error(f"Error during transcription worker shutdown: {e}")
+
+atexit.register(shutdown_transcription_worker)
+
 def threaded(job_func, *args):
     future = _executor.submit(job_func, *args)
     def _on_done(f):
@@ -463,6 +458,28 @@ def schedule_transcriptions():
     _transcription_worker.start()
     logger.info("Transcription worker thread started.")
     return _transcription_worker
+
+
+def queue_transcription(audio_file_path, transcription_dir):
+    """Safely queue an audio file for transcription, restarting worker if needed."""
+    global _transcription_worker
+
+    if not _transcription_worker or not _transcription_worker.is_alive():
+        logger.warning("Transcription worker is not running. Attempting to restart...")
+        try:
+            schedule_transcriptions()
+        except Exception as e:
+            logger.error(f"Failed to restart transcription worker: {e}")
+            logger.error(f"Transcription WILL NOT occur for {audio_file_path}")
+            return False
+
+    try:
+        transcription_queue.put([audio_file_path, transcription_dir])
+        logger.info(f"Queued {audio_file_path} for transcription.")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to queue {audio_file_path} for transcription: {e}")
+        return False
 
 
 def service_time_for_slot(slot, stream_tz, service_date, time_of_day):

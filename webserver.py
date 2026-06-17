@@ -37,6 +37,31 @@ def save_streams(data):
     with open(CONFIG_FILE, "w") as f:
         yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
+def _require_login():
+    """Check that user is logged in, abort with 403 if not."""
+    if not session.get("logged_in"):
+        abort(403)
+
+def _load_and_validate_stream_index(idx):
+    """Load streams and validate that idx is in bounds. Returns (data, streams) or aborts."""
+    data = load_streams()
+    streams = data.get("streams", [])
+    if idx < 0 or idx >= len(streams):
+        abort(404)
+    return data, streams
+
+def _build_stream_dict_from_form():
+    """Extract stream dict from POST form data."""
+    return {
+        "name": request.form.get("name", "").strip(),
+        "full_name": request.form.get("full_name", "").strip(),
+        "url": request.form.get("url", "").strip(),
+        "status_url": request.form.get("status_url", "").strip(),
+        "timezone": request.form.get("timezone", "UTC").strip(),
+        "services": _parse_slots_from_form(),
+        "enabled": request.form.get("enabled") == "on",
+    }
+
 def _normalize_stream(stream):
     """Ensure stream has a `services` list, migrating legacy sunday_* fields if needed."""
     if "services" not in stream:
@@ -149,22 +174,14 @@ def config_dashboard():
 
 @app.route("/config/stream/add", methods=["POST"])
 def config_stream_add():
-    if not session.get("logged_in"):
-        abort(403)
-    data = load_streams()
-    streams = data.get("streams", [])
+    _require_login()
     name = request.form.get("name", "").strip()
     if not name:
         abort(400)
-    new_stream = {
-        "name": name,
-        "full_name": request.form.get("full_name", "").strip(),
-        "url": request.form.get("url", "").strip(),
-        "status_url": request.form.get("status_url", "").strip(),
-        "timezone": request.form.get("timezone", "UTC").strip(),
-        "services": _parse_slots_from_form(),
-        "enabled": request.form.get("enabled") == "on",
-    }
+    data = load_streams()
+    streams = data.get("streams", [])
+    new_stream = _build_stream_dict_from_form()
+    new_stream["name"] = name
     streams.append(new_stream)
     data["streams"] = streams
     save_streams(data)
@@ -172,33 +189,17 @@ def config_stream_add():
 
 @app.route("/config/stream/<int:idx>/edit", methods=["POST"])
 def config_stream_edit(idx):
-    if not session.get("logged_in"):
-        abort(403)
-    data = load_streams()
-    streams = data.get("streams", [])
-    if idx < 0 or idx >= len(streams):
-        abort(404)
-    streams[idx] = {
-        "name": request.form.get("name", "").strip(),
-        "full_name": request.form.get("full_name", "").strip(),
-        "url": request.form.get("url", "").strip(),
-        "status_url": request.form.get("status_url", "").strip(),
-        "timezone": request.form.get("timezone", "UTC").strip(),
-        "services": _parse_slots_from_form(),
-        "enabled": request.form.get("enabled") == "on",
-    }
+    _require_login()
+    data, streams = _load_and_validate_stream_index(idx)
+    streams[idx] = _build_stream_dict_from_form()
     data["streams"] = streams
     save_streams(data)
     return redirect(url_for("config_dashboard"))
 
 @app.route("/config/stream/<int:idx>/toggle", methods=["POST"])
 def config_stream_toggle(idx):
-    if not session.get("logged_in"):
-        abort(403)
-    data = load_streams()
-    streams = data.get("streams", [])
-    if idx < 0 or idx >= len(streams):
-        abort(404)
+    _require_login()
+    data, streams = _load_and_validate_stream_index(idx)
     streams[idx]["enabled"] = not streams[idx].get("enabled", True)
     data["streams"] = streams
     save_streams(data)
@@ -206,12 +207,8 @@ def config_stream_toggle(idx):
 
 @app.route("/config/stream/<int:idx>/delete", methods=["POST"])
 def config_stream_delete(idx):
-    if not session.get("logged_in"):
-        abort(403)
-    data = load_streams()
-    streams = data.get("streams", [])
-    if idx < 0 or idx >= len(streams):
-        abort(404)
+    _require_login()
+    data, streams = _load_and_validate_stream_index(idx)
     streams.pop(idx)
     data["streams"] = streams
     save_streams(data)
