@@ -24,7 +24,7 @@ USER app
 # This layer is only invalidated when requirements.txt changes, not when
 # source files or the model are updated.
 COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,target=/home/app/.cache/pip \
     pip install -r requirements.txt
 
 # Copy application code (changes frequently — after pip so edits don't
