@@ -20,12 +20,39 @@ ENV PATH="/opt/venv/bin:$PATH"
 ENV VIRTUAL_ENV=/opt/venv
 
 # Copy requirements and install with BuildKit cache mount
-# This layer is cached until requirements.txt changes
+# Split into batches to reduce peak memory usage during extraction
 WORKDIR /tmp
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install --upgrade pip wheel setuptools
+
+# Install base packages first (smallest, least memory intensive)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+    python-telegram-bot==20.7 \
+    python-dotenv==1.0.0 \
+    pytz==2023.3 \
+    pyyaml \
+    psutil \
+    schedule==1.2.0 \
+    requests==2.31.0
+
+# Install web/audio packages (medium size)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+    flask \
+    flask-wtf \
+    mutagen \
+    aiohttp==3.9.1 \
+    tzlocal==5.2
+
+# Install heavy packages last (torch, whisper - with cache already warmed up)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+    --find-links https://download.pytorch.org/whl/cpu/torch_stable.html \
+    torch==2.3.0+cpu \
+    torchaudio==2.3.0+cpu \
+    openai-whisper
 
 # ============================================================================
 # STAGE 2: Runtime — copies pre-built packages from builder, no compilation
