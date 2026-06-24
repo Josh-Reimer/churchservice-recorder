@@ -12,19 +12,21 @@ ByteWorship Recorder automatically records Icecast audio streams (from listentoc
 
 ## Running the project
 
-**Important: Download the Whisper model first (one-time setup)**
+**Important: Quick Start**
 
 ```bash
 # 1. Download the Whisper large-v3 model (~2.9 GB, takes 5-10 minutes)
 python download_model.py
 
-# 2. Build and start both containers (with BuildKit for faster builds)
+# 2. Build and start both containers (CPU-only torch by default)
 export DOCKER_BUILDKIT=1
 docker compose up -d --build
 
 # 3. Access the web UI: http://0.0.0.0:5003
 # Login: admin / 42
 ```
+
+**Note:** Default build uses CPU-only PyTorch (~130 MB wheels) to prevent OOM crashes on 8 GB systems. Whisper transcription still works fine on CPU (30-45 min recordings take 30-90 min to transcribe in background). See `TORCH_CPU_VS_CUDA.md` if you want CUDA/GPU support instead.
 
 **Troubleshooting common build issues:**
 

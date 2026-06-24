@@ -9,7 +9,13 @@ openai-whisper
 flask
 mutagen
 flask-wtf
-torch==2.3.0
-torchaudio==2.3.0
 pyyaml
 psutil
+
+# IMPORTANT: PyTorch CPU-only variant to prevent OOM during docker build
+# CPU wheel: ~130 MB (vs 2.3 GB with CUDA libraries)
+# Whisper transcription still runs, falls back to CPU from CUDA if available
+# To use CUDA/GPU: remove +cpu from torch wheels and install CUDA libraries
+--find-links https://download.pytorch.org/whl/cpu/torch_stable.html
+torch==2.3.0+cpu
+torchaudio==2.3.0+cpu
