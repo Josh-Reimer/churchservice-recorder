@@ -1,0 +1,3 @@
+# This directory holds the Whisper large-v3 model (~2.9 GB).
+# The model file is NOT checked into git (see .gitignore).
+# To set up: run `python download_model.py` before docker compose up.

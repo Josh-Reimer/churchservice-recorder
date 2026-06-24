@@ -352,8 +352,8 @@ def gpu_transcribe_worker():
     # Load the model once and keep it resident for all queued files.
     # This avoids reloading (minutes of overhead) between recordings.
     try:
-        # Use the local model file bundled in the image (COPY models models in Dockerfile).
-        # This avoids a ~3 GB download on every container start.
+        # Use the local model file mounted as a volume (./models:/app/models).
+        # If not available, falls back to downloading from HuggingFace.
         local_model_path = "/app/models/large-v3.pt"
         model_name_or_path = local_model_path if os.path.exists(local_model_path) else "large-v3"
         model = whisper.load_model(model_name_or_path, device=device)

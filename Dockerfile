@@ -35,9 +35,9 @@ COPY --chown=app:app templates templates
 COPY --chown=app:app appicon.png .
 COPY --chown=app:app config config
 
-# Copy the bundled Whisper model last — it's large and rarely changes.
-# Keeping it at the end means code edits don't force a multi-GB re-copy.
-COPY --chown=app:app models models
+# NOTE: Whisper model (large-v3.pt) is now mounted as a volume at runtime
+# instead of copied into the image. This reduces the build image size from
+# 6+ GB to ~1.5 GB and prevents disk exhaustion during docker compose build.
 
 # Create directories for recordings and transcriptions
 RUN mkdir -p /app/recordings /app/transcriptions

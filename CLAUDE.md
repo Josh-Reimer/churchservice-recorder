@@ -1,17 +1,39 @@
 # CLAUDE.md
+always ask the user what their intened behavious is and confirm it with them before making changes.
+run tests before building the docker containers and keep in mind that the containers will run on debian based linux distrubutions.
+after building docker containers, always check the logs for any errors. suggest to the user to fix cosemtic errors in logs if you see any. if you find major critical errors, create a plan first and then ask the user for confirmation.
+this application should be able to run on less than 8gb of ram and use no more than 3 gb of storage minus the ai model files. it should be able to perform well on an intel core i3 cpu.
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this project does
 
-ByteWorship Recorder automatically records Icecast audio streams (from listentochurch.com) on a configurable schedule, then transcribes them with OpenAI Whisper. It runs as two Docker containers: one for recording/transcription (`new_recorder.py`) and one for a Flask web UI (`webserver.py`).
+ByteWorship Recorder automatically records Icecast audio streams (from listentochurch.com) on a configurable schedule, then transcribes them with OpenAI Whisper locally. It runs as two Docker containers: one for recording/transcription (`new_recorder.py`) and one for a Flask web UI (`webserver.py`).
 
 ## Running the project
 
+**Important: Download the Whisper model first (one-time setup)**
+
 ```bash
-# Build and start both containers
+# 1. Download the Whisper large-v3 model (~2.9 GB, takes 5-10 minutes)
+python download_model.py
+
+# 2. Build and start both containers (with BuildKit for faster builds)
+export DOCKER_BUILDKIT=1
 docker compose up -d --build
 
+# 3. Access the web UI: http://0.0.0.0:5003
+# Login: admin / 42
+```
+
+**Troubleshooting common build issues:**
+
+- If you see "No space left on device" during build: `docker system prune -a` to free up disk
+- If model download fails: `python download_model.py` to retry, or see BUILD.md for manual setup
+- If containers can't find the model: Verify `ls -lh models/large-v3.pt` exists
+
+**Shell access and logs:**
+```bash
 # Shell into a container
 docker exec -it church-recorder bash
 docker exec -it church-webserver bash
@@ -20,13 +42,13 @@ docker exec -it church-webserver bash
 docker exec church-recorder tail -f app.log
 ```
 
-Web UI: `http://0.0.0.0:5003` — login `admin` / `42`
-
-To test recording outside Docker:
+**Testing outside Docker:**
 ```bash
 python record_now.py        # records until Ctrl+C
 python record_now.py 60     # records for 60 seconds
 ```
+
+**See BUILD.md for detailed build instructions and troubleshooting.**
 
 ## Required `.env` file
 
@@ -142,3 +164,25 @@ Output dirs are derived from `full_name`: lowercased, spaces→`_`, `cong`→`co
 - `record_now.py` — one-shot manual recording against a hardcoded local stream URL
 - `local_transcribe.py` / `sermon_to_text.py` — standalone Whisper transcription of existing files
 - `audio_length.py` — prints duration of an audio file
+
+
+### Timezones
+This application requires great care in timezone accuracy. If timezones are not accurate on the server, streams could be recorded at the wrong time or not at all. every time you run a code review, develop a sprint plan, or push to github, check over the timezone related logic to make sure nothing got missed or accidently changed. This is worth spending time on.
+For example, if the stream is in America/Denver time, and the server is on America/Vancouver time, remember to subtract the number of hours different that those timezones are, from the scheduler logic so the recording function starts at the right time.
+
+## Whisper Model Volume Mount
+
+As of the current build, the Whisper large-v3 model (~2.9 GB) is **mounted as a volume** rather than copied into the Docker image. This significantly reduces build resource requirements.
+
+**How it works:**
+1. Model is downloaded once to `./models/large-v3.pt` via `download_model.py`
+2. Docker containers mount this directory at runtime: `./models:/app/models:ro`
+3. The recorder loads the model from the mounted path at startup
+
+**Why this matters:**
+- **Build size:** Reduced from 6+ GB to ~1.5 GB (75% smaller)
+- **Build disk requirement:** ~4 GB instead of 12 GB (prevents OOM on 8GB systems)
+- **Rebuild time:** Dramatically faster — only ~30s since the model isn't re-copied
+- **Reliability:** Prevents "No space left on device" errors during `docker compose up --build`
+
+**Important:** Always run `python download_model.py` before the first `docker compose up --build`. See BUILD.md for details.
