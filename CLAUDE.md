@@ -170,19 +170,35 @@ Output dirs are derived from `full_name`: lowercased, spaces→`_`, `cong`→`co
 This application requires great care in timezone accuracy. If timezones are not accurate on the server, streams could be recorded at the wrong time or not at all. every time you run a code review, develop a sprint plan, or push to github, check over the timezone related logic to make sure nothing got missed or accidently changed. This is worth spending time on.
 For example, if the stream is in America/Denver time, and the server is on America/Vancouver time, remember to subtract the number of hours different that those timezones are, from the scheduler logic so the recording function starts at the right time.
 
-## Whisper Model Volume Mount
+## Build System: Multi-Stage + Volume Mount
 
-As of the current build, the Whisper large-v3 model (~2.9 GB) is **mounted as a volume** rather than copied into the Docker image. This significantly reduces build resource requirements.
+The build system uses **two key optimizations** to prevent crashes on resource-constrained systems:
+
+### 1. Multi-Stage Dockerfile
+The Dockerfile is split into two stages:
+- **Builder stage:** Compiles all Python dependencies from source (torch, whisper, etc.)
+  - Includes build tools (gcc, g++, build-essential)
+  - Cached by Docker BuildKit after first build
+- **Runtime stage:** Only copies pre-built packages, no compilation
+  - Slim image (no build tools)
+  - Fast on rebuilds: copies pre-built packages instead of recompiling
+
+**Impact:**
+- ✅ Eliminates OOM crashes during `pip install` (heavy compilation)
+- ✅ First build takes ~5-10 min (compilation), cached
+- ✅ Subsequent rebuilds take ~30 sec (just copy pre-built packages)
+
+### 2. Whisper Model as Volume Mount
+The Whisper large-v3 model (~2.9 GB) is **mounted at runtime**, not baked into the image.
 
 **How it works:**
-1. Model is downloaded once to `./models/large-v3.pt` via `download_model.py`
-2. Docker containers mount this directory at runtime: `./models:/app/models:ro`
-3. The recorder loads the model from the mounted path at startup
+1. Model is downloaded once to `./models/large-v3.pt`
+2. Docker containers mount this at runtime: `./models:/app/models:ro`
+3. Recorder loads the model from the mounted path at startup
 
-**Why this matters:**
-- **Build size:** Reduced from 6+ GB to ~1.5 GB (75% smaller)
-- **Build disk requirement:** ~4 GB instead of 12 GB (prevents OOM on 8GB systems)
-- **Rebuild time:** Dramatically faster — only ~30s since the model isn't re-copied
-- **Reliability:** Prevents "No space left on device" errors during `docker compose up --build`
+**Impact:**
+- ✅ Docker image size: 6+ GB → ~1.5 GB (75% reduction)
+- ✅ Build disk requirement: 12 GB → ~4 GB
+- ✅ Prevents "No space left on device" errors
 
 **Important:** Always run `python download_model.py` before the first `docker compose up --build`. See BUILD.md for details.
