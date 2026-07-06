@@ -77,13 +77,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
+# Set working directory (must exist before chown below)
+WORKDIR /app
+
 # Create a non-root user for security
 RUN useradd --create-home --shell /bin/bash app \
     && chown -R app:app /app
 USER app
-
-# Set working directory
-WORKDIR /app
 
 # Copy application code (changes frequently — after deps so code edits don't
 # bust the pip layer, which is now in the venv from builder)
@@ -100,9 +100,9 @@ RUN mkdir -p /app/recordings /app/transcriptions
 # instead of copied into the image. This reduces build requirements and
 # allows the model to be shared between containers.
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import requests; requests.get('http://localhost:5003/health', timeout=5)" || exit 1
+# NOTE: No HEALTHCHECK here — this image runs both the recorder and the
+# webserver, which need different checks. They are defined per-service in
+# docker-compose.yml instead.
 
 # Default command
 CMD ["python", "new_recorder.py"]
