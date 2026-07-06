@@ -322,6 +322,7 @@ def run_ffmpeg(name, url, output_path, output_format="mp3"):
     """Run an FFmpeg process and return the process handle."""
     cmd = [
         "ffmpeg", "-y",
+        "-nostats", "-loglevel", "warning",
         "-i", url,
         "-c", "copy",
         f"{output_path}.{output_format}"
@@ -329,12 +330,16 @@ def run_ffmpeg(name, url, output_path, output_format="mp3"):
     logger.info(f"Starting FFmpeg for {name}: {url} → {output_path}.{output_format}")
 
     try:
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
+        # stderr must not be an unread PIPE: once its 64 KB buffer fills,
+        # ffmpeg blocks on the write and the recording silently stalls.
+        # Send it to a log file next to the recording instead.
+        with open(f"{output_path}.ffmpeg.log", "w") as stderr_log:
+            process = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_log
+            )
         logger.info(f"FFmpeg process started (PID {process.pid})")
         return process  # <— Return immediately
     except Exception as e:
