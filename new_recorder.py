@@ -521,83 +521,107 @@ def check_services():
     for stream_info in services:
         if not stream_info.enabled:
             continue
-        for slot in stream_info.slots:
-            now_in_stream_tz = current_time.astimezone(stream_info.stream_tz)
-            if now_in_stream_tz.weekday() != slot.day_of_week:
-                continue
-            service_date = now_in_stream_tz.date()
-            maybe_start_service(stream_info, slot, "morning",
-                service_time_for_slot(slot, stream_info.stream_tz, service_date, "morning"),
-                current_time)
-            maybe_start_service(stream_info, slot, "evening",
-                service_time_for_slot(slot, stream_info.stream_tz, service_date, "evening"),
-                current_time)
+        try:
+            for slot in stream_info.slots:
+                now_in_stream_tz = current_time.astimezone(stream_info.stream_tz)
+                if now_in_stream_tz.weekday() != slot.day_of_week:
+                    continue
+                service_date = now_in_stream_tz.date()
+                maybe_start_service(stream_info, slot, "morning",
+                    service_time_for_slot(slot, stream_info.stream_tz, service_date, "morning"),
+                    current_time)
+                maybe_start_service(stream_info, slot, "evening",
+                    service_time_for_slot(slot, stream_info.stream_tz, service_date, "evening"),
+                    current_time)
+        except Exception as e:
+            # One broken stream must not kill the schedule loop for the rest.
+            logger.error(f"Scheduling check failed for stream '{stream_info.name}': {e}", exc_info=e)
 
 
 def build_services(config):
-    """Build the services list from a loaded config dict."""
+    """Build the services list from a loaded config dict.
+
+    A stream with invalid config (unknown timezone, malformed time, …) is
+    skipped with an error instead of taking down the whole recorder.
+    """
     new_services = []
     seen_urls = set()
     for stream in config.get("streams", []):
-        url = stream.get("url", "")
-        if url in seen_urls:
-            logger.warning(f"Duplicate stream URL '{url}' in streams.yml — skipping.")
+        try:
+            new_services.append(_build_stream_info(stream, seen_urls))
+        except SkipStream:
             continue
-        seen_urls.add(url)
-        name = stream.get("name", "Unknown")
-        tz_name = stream.get("timezone", "UTC")
-        stream_tz = pytz.timezone(tz_name)
-        full_name = stream.get("full_name", name)
-        safe_name = (
-            full_name.lower()
-            .replace(" ", "_").replace(",", "").replace(".", "")
-            .replace("cong", "congregation").replace("-", "_")
-        )
-        output_dir = os.path.join(OUTPUT_DIR, safe_name)
-        transcription_dir = os.path.join(TRANSCRIPTIONS_DIR, safe_name)
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(transcription_dir, exist_ok=True)
-        enabled = stream.get("enabled", True)
-
-        # Support new `services` list; fall back to legacy sunday_*_service_time fields
-        raw_slots = stream.get("services")
-        if raw_slots is None:
-            morning = stream.get("sunday_morning_service_time")
-            evening = stream.get("sunday_evening_service_time")
-            ssb = stream.get("sunday_school_break", False)
-            raw_slots = [{"day": "sunday", "morning": morning, "evening": evening,
-                          "sunday_school_break": ssb}] if (morning or evening) else []
-
-        slots = []
-        for rs in raw_slots:
-            day_str = str(rs.get("day", "sunday")).lower()
-            dow = DAYS.index(day_str) if day_str in DAYS else 6
-            m_text = rs.get("morning")
-            e_text = rs.get("evening")
-            slots.append(ServiceSlot(
-                day_of_week=dow,
-                morning_time_text=m_text,
-                evening_time_text=e_text,
-                morning_time=convert_time(m_text, stream_tz),
-                evening_time=convert_time(e_text, stream_tz),
-                sunday_school_break=rs.get("sunday_school_break", False),
-            ))
-
-        stream_info = StreamInfo(
-            name=name,
-            url=url,
-            status_url=stream.get("status_url", ""),
-            timezone=tz_name,
-            stream_tz=stream_tz,
-            audio_dir=output_dir,
-            transcription_dir=transcription_dir,
-            slots=slots,
-            enabled=enabled,
-        )
-        new_services.append(stream_info)
-        for slot in slots:
-            logger.info(f"Loaded {name}: {DAYS[slot.day_of_week]} morning={slot.morning_time}, evening={slot.evening_time}")
+        except Exception as e:
+            name = stream.get("name", "Unknown") if isinstance(stream, dict) else "Unknown"
+            logger.error(f"Skipping stream '{name}' — invalid config: {e}")
+            notify_telegram(f"⚠️ Stream '{name}' has invalid config and will NOT be recorded: {e}")
     return new_services
+
+
+class SkipStream(Exception):
+    """Raised to skip a stream without treating it as a config error."""
+
+
+def _build_stream_info(stream, seen_urls):
+    """Build one StreamInfo from a raw config entry. Raises on invalid config."""
+    url = stream.get("url", "")
+    if url in seen_urls:
+        logger.warning(f"Duplicate stream URL '{url}' in streams.yml — skipping.")
+        raise SkipStream(url)
+    seen_urls.add(url)
+    name = stream.get("name", "Unknown")
+    tz_name = stream.get("timezone", "UTC")
+    stream_tz = pytz.timezone(tz_name)
+    full_name = stream.get("full_name", name)
+    safe_name = (
+        full_name.lower()
+        .replace(" ", "_").replace(",", "").replace(".", "")
+        .replace("cong", "congregation").replace("-", "_")
+    )
+    output_dir = os.path.join(OUTPUT_DIR, safe_name)
+    transcription_dir = os.path.join(TRANSCRIPTIONS_DIR, safe_name)
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(transcription_dir, exist_ok=True)
+    enabled = stream.get("enabled", True)
+
+    # Support new `services` list; fall back to legacy sunday_*_service_time fields
+    raw_slots = stream.get("services")
+    if raw_slots is None:
+        morning = stream.get("sunday_morning_service_time")
+        evening = stream.get("sunday_evening_service_time")
+        ssb = stream.get("sunday_school_break", False)
+        raw_slots = [{"day": "sunday", "morning": morning, "evening": evening,
+                      "sunday_school_break": ssb}] if (morning or evening) else []
+
+    slots = []
+    for rs in raw_slots:
+        day_str = str(rs.get("day", "sunday")).lower()
+        dow = DAYS.index(day_str) if day_str in DAYS else 6
+        m_text = rs.get("morning")
+        e_text = rs.get("evening")
+        slots.append(ServiceSlot(
+            day_of_week=dow,
+            morning_time_text=m_text,
+            evening_time_text=e_text,
+            morning_time=convert_time(m_text, stream_tz),
+            evening_time=convert_time(e_text, stream_tz),
+            sunday_school_break=rs.get("sunday_school_break", False),
+        ))
+
+    stream_info = StreamInfo(
+        name=name,
+        url=url,
+        status_url=stream.get("status_url", ""),
+        timezone=tz_name,
+        stream_tz=stream_tz,
+        audio_dir=output_dir,
+        transcription_dir=transcription_dir,
+        slots=slots,
+        enabled=enabled,
+    )
+    for slot in slots:
+        logger.info(f"Loaded {name}: {DAYS[slot.day_of_week]} morning={slot.morning_time}, evening={slot.evening_time}")
+    return stream_info
 
 
 def check_config_reload():
@@ -610,11 +634,12 @@ def check_config_reload():
     logger.info("streams.yml changed — reloading config.")
     try:
         config = _load_config()
+        new_services = build_services(config)
     except Exception as e:
-        logger.error(f"Config reload failed: {e}")
+        logger.error(f"Config reload failed — keeping previous config: {e}")
+        notify_telegram(f"⚠️ streams.yml reload failed — keeping previous config: {e}")
         return
     old_by_name = {s.name: s for s in services}
-    new_services = build_services(config)
     for s in new_services:
         if s.name in old_by_name:
             old_slots = old_by_name[s.name].slots

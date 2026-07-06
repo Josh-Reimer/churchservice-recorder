@@ -168,3 +168,43 @@ def test_day_name_to_index():
     for day_str, expected_idx in test_cases:
         idx = DAYS.index(day_str) if day_str in DAYS else 6
         assert idx == expected_idx
+
+
+class TestBuildServicesResilience:
+    """A broken stream entry must be skipped, not crash the recorder."""
+
+    @pytest.fixture
+    def recorder(self, monkeypatch, temp_config_dir):
+        import new_recorder as nr
+        monkeypatch.setattr(nr, "OUTPUT_DIR", os.path.join(temp_config_dir, "rec"))
+        monkeypatch.setattr(nr, "TRANSCRIPTIONS_DIR", os.path.join(temp_config_dir, "tr"))
+        monkeypatch.setattr(nr, "notify_telegram", lambda text: None)
+        return nr
+
+    def _good_stream(self, url="https://example.com/a.mp3"):
+        return {
+            "name": "good", "full_name": "Good Stream", "url": url,
+            "status_url": "https://example.com/status",
+            "timezone": "America/Chicago",
+            "services": [{"day": "sunday", "morning": "10:00"}],
+        }
+
+    def test_unknown_timezone_skips_only_that_stream(self, recorder):
+        bad = self._good_stream(url="https://example.com/b.mp3")
+        bad["name"] = "bad"
+        bad["timezone"] = "America/Denverr"
+        services = recorder.build_services({"streams": [bad, self._good_stream()]})
+        assert [s.name for s in services] == ["good"]
+
+    def test_malformed_time_skips_only_that_stream(self, recorder):
+        # Unquoted `morning: 10:00` in YAML parses as the integer 600.
+        bad = self._good_stream(url="https://example.com/b.mp3")
+        bad["name"] = "bad"
+        bad["services"] = [{"day": "sunday", "morning": 600}]
+        services = recorder.build_services({"streams": [bad, self._good_stream()]})
+        assert [s.name for s in services] == ["good"]
+
+    def test_all_valid_streams_load(self, recorder):
+        services = recorder.build_services({"streams": [self._good_stream()]})
+        assert len(services) == 1
+        assert services[0].slots[0].morning_time_text == "10:00"

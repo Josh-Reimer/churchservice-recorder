@@ -2,7 +2,9 @@ from flask import Flask, render_template, request, redirect, url_for, send_from_
 from flask_wtf.csrf import CSRFProtect
 import os
 import yaml
+import pytz
 import mutagen
+from datetime import datetime
 from mutagen.mp3 import MP3
 
 app = Flask(__name__)
@@ -51,13 +53,16 @@ def _load_and_validate_stream_index(idx):
     return data, streams
 
 def _build_stream_dict_from_form():
-    """Extract stream dict from POST form data."""
+    """Extract stream dict from POST form data. Aborts 400 on invalid input."""
+    timezone = request.form.get("timezone", "UTC").strip()
+    if timezone not in pytz.all_timezones_set:
+        abort(400, description=f"Unknown timezone: {timezone!r}. Use an IANA name like America/Chicago.")
     return {
         "name": request.form.get("name", "").strip(),
         "full_name": request.form.get("full_name", "").strip(),
         "url": request.form.get("url", "").strip(),
         "status_url": request.form.get("status_url", "").strip(),
-        "timezone": request.form.get("timezone", "UTC").strip(),
+        "timezone": timezone,
         "services": _parse_slots_from_form(),
         "enabled": request.form.get("enabled") == "on",
     }
@@ -73,15 +78,30 @@ def _normalize_stream(stream):
                                 "sunday_school_break": ssb}] if (morning or evening) else []
     return stream
 
+def _validate_time_text(value, field):
+    """Abort 400 unless value is a valid HH:MM time (or None)."""
+    if value is None:
+        return None
+    try:
+        datetime.strptime(value, "%H:%M")
+    except ValueError:
+        abort(400, description=f"Invalid {field} time: {value!r}. Use 24h HH:MM format.")
+    return value
+
 def _parse_slots_from_form():
-    count = int(request.form.get("slot_count", "0"))
+    try:
+        count = int(request.form.get("slot_count", "0"))
+    except ValueError:
+        abort(400, description="slot_count must be a number.")
     slots = []
     for i in range(count):
-        day = request.form.get(f"slot_day_{i}", "").strip()
+        day = request.form.get(f"slot_day_{i}", "").strip().lower()
         if not day:
             continue
-        morning = request.form.get(f"slot_morning_{i}", "").strip() or None
-        evening = request.form.get(f"slot_evening_{i}", "").strip() or None
+        if day not in DAYS_LIST:
+            abort(400, description=f"Invalid day: {day!r}.")
+        morning = _validate_time_text(request.form.get(f"slot_morning_{i}", "").strip() or None, "morning")
+        evening = _validate_time_text(request.form.get(f"slot_evening_{i}", "").strip() or None, "evening")
         ssb = request.form.get(f"slot_ssb_{i}") == "on"
         slot = {"day": day}
         if morning:
