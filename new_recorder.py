@@ -1,3 +1,4 @@
+import re
 import subprocess
 import time
 import requests
@@ -650,8 +651,11 @@ def _build_stream_info(stream, seen_urls):
     safe_name = (
         full_name.lower()
         .replace(" ", "_").replace(",", "").replace(".", "")
-        .replace("cong", "congregation").replace("-", "_")
     )
+    # Expand the "cong" abbreviation to "congregation", but skip it where
+    # "congregation" is already spelled out in full (avoids "congregationregation").
+    safe_name = re.sub(r"cong(?!regation)", "congregation", safe_name)
+    safe_name = safe_name.replace("-", "_")
     output_dir = os.path.join(OUTPUT_DIR, safe_name)
     transcription_dir = os.path.join(TRANSCRIPTIONS_DIR, safe_name)
     os.makedirs(output_dir, exist_ok=True)
