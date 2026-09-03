@@ -10,7 +10,7 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import yaml
 from concurrent.futures import ThreadPoolExecutor
-from threading import Thread
+from threading import Thread, Lock
 import atexit
 import psutil
 import queue
@@ -87,6 +87,8 @@ OUTPUT_DIR = "./recordings"
 TRANSCRIPTIONS_DIR = "./transcriptions"
 transcription_queue = queue.Queue(maxsize=0)
 _transcription_worker = None
+_worker_start_lock = Lock()
+_low_ram_notified = False
 
 # Create timed rotating handler
 handler = TimedRotatingFileHandler(
@@ -117,7 +119,21 @@ if not TELEGRAM_ENABLED:
 CHECK_TIMEOUT = 90 # minutes
 MAX_OFFLINE_POLLS = 3  # consecutive offline/error polls before treating stream as ended
 SERVICE_TRIGGER_WINDOW = timedelta(seconds=max(60, CHECK_INTERVAL * 2))
-_executor = ThreadPoolExecutor(max_workers=16)
+
+# Whisper large-v3 needs ~6 GB just to load on CPU (fp16 checkpoint upcast to
+# fp32), plus headroom for activations and the rest of the stack (OS, ffmpeg,
+# webserver container). Below this, skip transcription instead of risking an
+# OOM kill — recording always takes priority. Retried periodically in case
+# RAM frees up later (see RAM_RECHECK_INTERVAL_MINUTES).
+MIN_TRANSCRIBE_RAM_GB = float(os.getenv("MIN_TRANSCRIBE_RAM_GB", "7"))
+RAM_RECHECK_INTERVAL_MINUTES = int(os.getenv("RAM_RECHECK_INTERVAL_MINUTES", "20"))
+
+# ffmpeg here just copies the stream (-c copy, no re-encode) so each job is
+# cheap, but 16 concurrent jobs was a fixed guess unrelated to the actual
+# host. Scale it to the CPU instead so weak hardware (e.g. an i3) isn't asked
+# to juggle more simultaneous recordings than it realistically can.
+MAX_CONCURRENT_RECORDINGS = int(os.getenv("MAX_CONCURRENT_RECORDINGS", str(max(2, os.cpu_count() or 4))))
+_executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_RECORDINGS)
 
 def stream_available(status_url):
     """Check stream status from external API and print status."""
@@ -152,6 +168,36 @@ def notify_telegram_file(file_path: str, caption: str = ""):
     """Send a Telegram file if notifications are enabled."""
     if TELEGRAM_ENABLED:
         send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, file_path, caption=caption)
+
+
+def _available_ram_gb():
+    return psutil.virtual_memory().available / (1024 ** 3)
+
+
+def _has_enough_ram_for_transcription():
+    """Check whether there's enough free RAM to safely load Whisper.
+
+    Recording never depends on this — only transcription does. Notifies once
+    (not on every retry) the first time transcription is skipped.
+    """
+    global _low_ram_notified
+    available = _available_ram_gb()
+    if available < MIN_TRANSCRIBE_RAM_GB:
+        logger.warning(
+            f"Skipping transcription: {available:.1f} GB RAM available, "
+            f"need at least {MIN_TRANSCRIBE_RAM_GB:.1f} GB to load Whisper safely. "
+            f"Recording is unaffected. Will retry every {RAM_RECHECK_INTERVAL_MINUTES} min."
+        )
+        if not _low_ram_notified:
+            notify_telegram(
+                f"Transcription paused: only {available:.1f} GB RAM available "
+                f"({MIN_TRANSCRIBE_RAM_GB:.1f} GB needed for Whisper). Recordings are "
+                f"unaffected and will continue normally. Transcription will resume "
+                f"automatically once enough RAM is free."
+            )
+            _low_ram_notified = True
+        return False
+    return True
 
 
 def send_telegram_message(bot_token: str, chat_id: str, text: str) -> dict:
@@ -347,6 +393,9 @@ def run_ffmpeg(name, url, output_path, output_format="mp3"):
         raise
 
 def gpu_transcribe_worker():
+    if not _has_enough_ram_for_transcription():
+        return  # thread exits; queued files stay queued until a later retry
+
     import whisper
     import gc
     import torch
@@ -365,6 +414,12 @@ def gpu_transcribe_worker():
     except Exception as e:
         logger.error(f"Failed to load Whisper model: {e}")
         return
+
+    global _low_ram_notified
+    if _low_ram_notified:
+        logger.info("Whisper model loaded — transcription has resumed.")
+        notify_telegram("Transcription has resumed — enough RAM is free again.")
+        _low_ram_notified = False
 
     try:
         while True:
@@ -446,6 +501,11 @@ def shutdown_transcription_worker():
 atexit.register(shutdown_transcription_worker)
 
 def threaded(job_func, *args):
+    if _executor._work_queue.qsize() > 0:
+        logger.warning(
+            f"All {MAX_CONCURRENT_RECORDINGS} recording slots are busy — "
+            f"{job_func.__name__} will start as soon as one frees up."
+        )
     future = _executor.submit(job_func, *args)
     def _on_done(f):
         if f.cancelled():
@@ -457,12 +517,23 @@ def threaded(job_func, *args):
     future.add_done_callback(_on_done)
 
 def schedule_transcriptions():
-    """Start the background transcription worker thread."""
+    """Start the background transcription worker thread, if it isn't already running."""
     global _transcription_worker
-    _transcription_worker = Thread(target=gpu_transcribe_worker, daemon=True)
-    _transcription_worker.start()
-    logger.info("Transcription worker thread started.")
-    return _transcription_worker
+    with _worker_start_lock:
+        if _transcription_worker and _transcription_worker.is_alive():
+            return _transcription_worker
+        _transcription_worker = Thread(target=gpu_transcribe_worker, daemon=True)
+        _transcription_worker.start()
+        logger.info("Transcription worker thread started.")
+        return _transcription_worker
+
+
+def check_transcription_worker():
+    """Periodically retry starting the transcription worker if it was previously
+    skipped or exited (e.g. due to insufficient RAM at the time)."""
+    if not _transcription_worker or not _transcription_worker.is_alive():
+        logger.info("Transcription worker not running — checking whether it can start now.")
+        schedule_transcriptions()
 
 
 def queue_transcription(audio_file_path, transcription_dir):
@@ -672,6 +743,7 @@ if __name__ == "__main__":
     schedule_transcriptions()
     schedule.every(CHECK_INTERVAL).seconds.do(check_services)
     schedule.every(CHECK_INTERVAL).seconds.do(check_config_reload)
+    schedule.every(RAM_RECHECK_INTERVAL_MINUTES).minutes.do(check_transcription_worker)
 
     logger.info("Entering schedule loop. Waiting for Sunday services...")
     print("Recorder running. Waiting for scheduled services (Ctrl+C to stop).")
