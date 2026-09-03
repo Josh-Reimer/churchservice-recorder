@@ -1,10 +1,10 @@
 # VM Hardware Testing: Low-Spec Validation
 
-Two rounds of testing against real, resource-limited virtual machines — not
-`docker --memory` limits sharing the host's kernel, which have a blind spot
-(see "Why a real VM, not `docker --memory`" below). Both VMs were Debian 12
-(bookworm) `genericcloud` images booted headless under QEMU/KVM with
-hardware-enforced RAM/vCPU/disk caps, provisioned via cloud-init.
+Three rounds of testing against real, resource-limited virtual machines —
+not `docker --memory` limits sharing the host's kernel, which have a blind
+spot (see "Why a real VM, not `docker --memory`" below). All VMs were
+Debian 12 (bookworm) `genericcloud` images booted headless under QEMU/KVM
+with hardware-enforced RAM/vCPU/disk caps, provisioned via cloud-init.
 
 ## Why a real VM, not `docker --memory`
 
@@ -68,7 +68,7 @@ indefinitely without crashing. Transcription will not run on this spec
 (by design — see below), but recording, scheduling, config hot-reload, and
 the web UI all work normally.
 
-## Test 2: 4 GB RAM / 2 vCPU / 4 GB disk
+## Test 2: 4 GB RAM / 2 vCPU / 4 GB disk (disk too small)
 
 **Setup:** Debian 12 VM, 4096 MB RAM, 2 vCPUs, disk resized to exactly 4 GB
 (the smallest size the requested disk figure would actually accept for a
@@ -110,6 +110,53 @@ alone run them. This is a harder constraint than RAM: RAM has a documented,
 working degrade-to-recording-only path (Test 1); disk does not, because the
 image and model have to be present on disk before the process can start.
 
+## Test 3: 4 GB RAM / 2 vCPU / 16 GB disk (retest — disk fixed)
+
+Requested as a direct follow-up once storage was confirmed not to be a
+real constraint: same RAM/CPU as Test 2, disk raised to 16 GB (comfortably
+above the ~7 GB minimum measured in Test 2, since storage is usually not a
+problem for a real deployment).
+
+**Setup:** fresh Debian 12 VM, 4096 MB RAM, 2 vCPUs, 16 GB disk. Recorder
+image, Whisper `large-v3.pt`, and the real (now-deduplicated)
+`config/streams.yml` transferred in; recorder and webserver run with
+`docker run`, default settings, no artificial overrides.
+
+**Result: PASS.**
+
+```
+Base OS + docker.io:                       1.4 GB used, 14 GB free
++ recorder image + model loaded:           6.9 GB used,  8.1 GB free
+docker inspect churchtest_4g:              Status=running OOM=false exit=0
+
+app.log:
+  2026-09-03 13:26:58 WARNING - Skipping transcription: 3.4 GB RAM
+    available, need at least 10.0 GB to load Whisper safely. Recording
+    is unaffected. Will retry every 20 min.
+
+MAX_CONCURRENT_RECORDINGS = 2   (matches nproc == 2, confirms the
+                                  CPU-scaling fix works correctly on a
+                                  2-core machine, not just the 4-core
+                                  VM in Test 1)
+```
+
+Ran the webserver alongside the recorder in the same VM (matching a real
+deployment): both containers `running`, `/health` → `200`. Combined memory
+usage for the **entire stack** (recorder + webserver, transcription
+correctly idle): **542 MB used / 3.8 GB total**, 8.1 GB disk still free.
+Both containers confirmed stable (re-checked `docker inspect` after the
+fact — still `running`, `OOM=false`).
+
+**Verdict:** with adequate disk, a 4 GB RAM / 2 vCPU machine runs the full
+stack cleanly and indefinitely: recording, scheduling, config hot-reload,
+and the web UI all work; transcription correctly and cleanly stays off
+(3.4 GB available is even further below the 10 GB threshold than the 8 GB
+case in Test 1, so the skip path triggers immediately, no OOM risk at any
+point). This resolves Test 2's finding — the earlier failure was entirely
+a disk-provisioning issue, not an application defect. No code changes were
+needed for this pass, since the RAM-gating and CPU-scaling logic already
+fixed for Test 1 carried over unchanged.
+
 ## Note on CLAUDE.md's storage target
 
 CLAUDE.md's "no more than 3 GB of storage minus the AI model files" refers
@@ -126,11 +173,14 @@ constraint once the model is included — there's no way to satisfy both.
 |---|---|---|---|
 | 8 GB RAM / 4 vCPU / 20 GB disk | Pass after fix (transcription correctly skips, recording unaffected) | Pass (plenty of headroom) | **Usable** — matches CLAUDE.md's stated target |
 | 4 GB RAM / 2 vCPU / 4 GB disk | Not reached | **Fail** (can't fit image + model) | **Not viable** — needs more disk, not more code changes |
+| 4 GB RAM / 2 vCPU / 16 GB disk | **Pass** (transcription skips cleanly, whole stack uses 542 MB) | Pass (8.1 GB free after loading) | **Usable** — confirms Test 2's failure was disk-only |
 
-**Recommendation:** if a genuinely 4 GB-class machine is a real deployment
-target, the fix needed is disk provisioning (10 GB+ recommended), not
-further application changes — the RAM-gating and CPU-scaling logic already
-verified in Test 1 would very likely behave the same way here once the
-stack can actually be loaded, given 4 GB RAM is even further below the
-`MIN_TRANSCRIBE_RAM_GB` threshold than the 8 GB case that already skips
-transcription cleanly.
+**Recommendation:** the app runs reliably down to 4 GB RAM / 2 vCPU
+provided disk is not artificially constrained — confirmed directly in
+Test 3, not just inferred. The only hard requirement below CLAUDE.md's
+8 GB target is disk headroom: budget **~10 GB+ total** (OS + Docker ~1.4 GB,
+recorder image 2.7 GB, Whisper model 2.9 GB, plus working margin for
+recordings/logs). Given storage is not usually the constraint in practice,
+this is the easy side of the tradeoff — RAM was the one that needed an
+actual code fix (`MIN_TRANSCRIBE_RAM_GB`, Test 1); disk just needs to be
+sized correctly.
