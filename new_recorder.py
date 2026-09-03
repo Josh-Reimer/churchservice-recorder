@@ -120,12 +120,15 @@ CHECK_TIMEOUT = 90 # minutes
 MAX_OFFLINE_POLLS = 3  # consecutive offline/error polls before treating stream as ended
 SERVICE_TRIGGER_WINDOW = timedelta(seconds=max(60, CHECK_INTERVAL * 2))
 
-# Whisper large-v3 needs ~6 GB just to load on CPU (fp16 checkpoint upcast to
-# fp32), plus headroom for activations and the rest of the stack (OS, ffmpeg,
-# webserver container). Below this, skip transcription instead of risking an
-# OOM kill — recording always takes priority. Retried periodically in case
-# RAM frees up later (see RAM_RECHECK_INTERVAL_MINUTES).
-MIN_TRANSCRIBE_RAM_GB = float(os.getenv("MIN_TRANSCRIBE_RAM_GB", "7"))
+# Whisper large-v3's resident footprint settles around ~6 GB on CPU (fp16
+# checkpoint upcast to fp32), but loading it transiently needs more than
+# that: a 7 GB threshold still got OOM-killed mid-load on a genuine 8 GB VM
+# (7.4 GB was "available" at the pre-load check, but the load itself pushed
+# past it). Verified safe at a 10 GB container memory limit on the same
+# image. Below this, skip transcription instead of risking an OOM kill —
+# recording always takes priority. Retried periodically in case RAM frees up
+# later (see RAM_RECHECK_INTERVAL_MINUTES).
+MIN_TRANSCRIBE_RAM_GB = float(os.getenv("MIN_TRANSCRIBE_RAM_GB", "10"))
 RAM_RECHECK_INTERVAL_MINUTES = int(os.getenv("RAM_RECHECK_INTERVAL_MINUTES", "20"))
 
 # ffmpeg here just copies the stream (-c copy, no re-encode) so each job is

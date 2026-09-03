@@ -108,7 +108,7 @@ Legacy `sunday_morning_service_time` / `sunday_evening_service_time` fields are 
 
 **RAM-gated transcription:**
 
-Whisper `large-v3` needs ~6 GB just to load on CPU (fp16 checkpoint upcast to fp32) — verified by OOM-killing the recorder container at both 6 GB and 8 GB memory limits; it only survived at 10 GB. Since this exceeds the project's <8 GB target, `gpu_transcribe_worker()` checks `psutil.virtual_memory().available` against `MIN_TRANSCRIBE_RAM_GB` (default 7) before loading the model. Recording is never gated on this — only transcription is.
+Whisper `large-v3`'s resident footprint settles around ~6 GB on CPU (fp16 checkpoint upcast to fp32), but loading it transiently needs more: OOM-killed the recorder container at 6 GB and 8 GB memory limits, and even a 7 GB `MIN_TRANSCRIBE_RAM_GB` pre-load check still got OOM-killed mid-load on a genuine 8 GB / 4 vCPU KVM VM (7.4 GB was "available" at the pre-load check; loading itself pushed past it). Only verified safe at a 10 GB container limit. Since this exceeds the project's <8 GB target, `gpu_transcribe_worker()` checks `psutil.virtual_memory().available` against `MIN_TRANSCRIBE_RAM_GB` (default 10) before loading the model — meaning transcription essentially never runs on an actual 8 GB box, by design. Recording is never gated on this — only transcription is.
 
 - If RAM is insufficient, the worker thread exits without loading the model. Queued files stay in `transcription_queue` untouched. A WARNING is logged, and a one-time Telegram notice is sent (`_low_ram_notified` guards against repeat spam).
 - `check_transcription_worker()` runs every `RAM_RECHECK_INTERVAL_MINUTES` and restarts the worker if it isn't alive — so transcription resumes automatically once RAM frees up, without a container restart. `schedule_transcriptions()` is idempotent (guarded by `_worker_start_lock`) so this can't race with the reactive restart in `queue_transcription()`.
@@ -168,7 +168,7 @@ Output dirs are derived from `full_name`: lowercased, spaces→`_`, `cong`→`co
 | `CHECK_TIMEOUT` | 90 min | Give up waiting for a stream to come online |
 | `MAX_OFFLINE_POLLS` | 3 | Consecutive offline polls before stopping recording |
 | `SERVICE_TRIGGER_WINDOW` | 60 s | How late a scheduled trigger can still fire |
-| `MIN_TRANSCRIBE_RAM_GB` | 7 GB (env `MIN_TRANSCRIBE_RAM_GB`) | Minimum free RAM required to load Whisper; below this, transcription is skipped, not recording |
+| `MIN_TRANSCRIBE_RAM_GB` | 10 GB (env `MIN_TRANSCRIBE_RAM_GB`) | Minimum free RAM required to load Whisper; below this, transcription is skipped, not recording |
 | `RAM_RECHECK_INTERVAL_MINUTES` | 20 min (env `RAM_RECHECK_INTERVAL_MINUTES`) | How often to retry starting the transcription worker after a low-RAM skip |
 | `MAX_CONCURRENT_RECORDINGS` | `os.cpu_count()`, min 2 (env `MAX_CONCURRENT_RECORDINGS`) | Concurrent ffmpeg recording jobs allowed; scales to the host instead of a fixed guess |
 
