@@ -91,15 +91,27 @@ _transcription_worker = None
 _worker_start_lock = Lock()
 _low_ram_notified = False
 
-# Create timed rotating handler
-handler = TimedRotatingFileHandler(
-    'app.log',
-    when='D',     # Rotate at midnight
-    interval=14,          # Every 14 days
-    backupCount=26,       # Keep about 365 days worth at a 14-day interval
-    atTime=None,         # At midnight (default)
-    utc=False           # Use local time
-)
+# Logs live in LOG_DIR, which docker-compose mounts from the host (./logs) so
+# they survive rebuilds — app.log used to sit inside the container and every
+# `docker compose up --build` wiped the history.
+LOG_DIR = os.getenv("LOG_DIR", "logs")
+_log_file_error = None
+try:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    # Create timed rotating handler
+    handler = TimedRotatingFileHandler(
+        os.path.join(LOG_DIR, 'app.log'),
+        when='D',     # Rotate at midnight
+        interval=14,          # Every 14 days
+        backupCount=26,       # Keep about 365 days worth at a 14-day interval
+        atTime=None,         # At midnight (default)
+        utc=False           # Use local time
+    )
+except OSError as e:
+    # e.g. the host ./logs dir was created by Docker as root. Don't take the
+    # recorder down over it — log to stderr (`docker logs`) instead.
+    _log_file_error = e
+    handler = logging.StreamHandler()
 
 # Set format with date
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -109,6 +121,8 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logger.addHandler(handler)
 
+if _log_file_error:
+    logger.error(f"Cannot write {LOG_DIR}/app.log ({_log_file_error}) — logging to stderr instead.")
 logger.info("This will rotate every 14 days at midnight")
 CHECK_INTERVAL = 30  # seconds
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")

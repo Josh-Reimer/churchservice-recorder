@@ -164,7 +164,7 @@ docker logs -f church-recorder
 docker logs -f church-webserver
 
 # View app-specific logs (written to disk, not stdout)
-docker exec church-recorder tail -f app.log
+tail -f logs/app.log   # ./logs is mounted from the host
 ```
 
 ## Rebuilding After Code Changes

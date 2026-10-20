@@ -40,8 +40,9 @@ docker compose up -d --build
 docker exec -it church-recorder bash
 docker exec -it church-webserver bash
 
-# Recorder logs go to app.log (file handler only, not stdout)
-docker exec church-recorder tail -f app.log
+# Recorder logs go to logs/app.log (file handler only, not stdout).
+# ./logs is mounted from the host, so they survive rebuilds:
+tail -f logs/app.log
 ```
 
 **Testing outside Docker:**

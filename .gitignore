@@ -55,3 +55,6 @@ config/streams (Copy).yml
 models/large-v3.pt
 config/now.yml
 app.log.2026-01-03
+
+logs/*
+!logs/.gitkeep

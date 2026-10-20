@@ -30,6 +30,7 @@ services:
       - ./transcriptions:/app/transcriptions:rw
       - ./config:/app/config:rw
       - ./models:/app/models:ro  # Mount Whisper model as read-only volume
+      - ./logs:/app/logs:rw  # app.log + rotations, kept across rebuilds
       - /etc/localtime:/etc/localtime:ro  # Sync timezone with host
     
     # Network configuration
