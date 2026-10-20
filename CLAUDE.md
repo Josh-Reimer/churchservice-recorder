@@ -100,7 +100,7 @@ The `./config` volume is writable by both containers so the web UI can edit stre
 
 **Recording flow:**
 
-`record_stream()` polls `status_url` until the stream goes live, then runs ffmpeg. It monitors continuously and stops after `MAX_OFFLINE_POLLS` (3) consecutive offline checks. If `sunday_school_break=true`, it waits for the stream to return and records a second segment. Finished recordings are pushed to a `queue.Queue` for transcription.
+`record_stream()` polls `status_url` until the stream goes live, then runs ffmpeg (with `-reconnect`). A segment ends after `MAX_OFFLINE_POLLS` (3) consecutive offline checks, or when ffmpeg exits on its own (it's watched every second). If the stream is back within `MERGE_GAP_MINUTES` (5) of going offline, a new part is recorded and all parts are joined into **one file** with ffmpeg's concat demuxer (`join_parts()`; on failure the parts are kept as separate files). If it stays off longer, the file is finished and the job keeps watching for `REARM_MINUTES` (60; `CHECK_TIMEOUT` after the first file when `sunday_school_break=true`) and records a return as a new file. A whole job is capped at `MAX_RECORDING_MINUTES` (240). Only one job runs per stream URL: a newer trigger sets the older job's stop event and waits for it to finish. Finished recordings are pushed to a `queue.Queue` for transcription; files over Telegram's 50 MB bot limit get a message instead of an upload.
 
 **Backwards compatibility:**
 
@@ -170,7 +170,10 @@ Output dirs are derived from `full_name`: lowercased, spaces→`_`, `cong`→`co
 | `SERVICE_TRIGGER_WINDOW` | 60 s | How late a scheduled trigger can still fire |
 | `MIN_TRANSCRIBE_RAM_GB` | 10 GB (env `MIN_TRANSCRIBE_RAM_GB`) | Minimum free RAM required to load Whisper; below this, transcription is skipped, not recording |
 | `RAM_RECHECK_INTERVAL_MINUTES` | 20 min (env `RAM_RECHECK_INTERVAL_MINUTES`) | How often to retry starting the transcription worker after a low-RAM skip |
-| `MAX_CONCURRENT_RECORDINGS` | `os.cpu_count()`, min 2 (env `MAX_CONCURRENT_RECORDINGS`) | Concurrent ffmpeg recording jobs allowed; scales to the host instead of a fixed guess |
+| `MAX_CONCURRENT_RECORDINGS` | 32 (env `MAX_CONCURRENT_RECORDINGS`) | Recording job threads. Jobs mostly sleep while waiting for streams; sizing this to the CPU count (4) made jobs start 15–45 min late |
+| `MERGE_GAP_MINUTES` | 5 (env) | Stream back within this long → same file |
+| `REARM_MINUTES` | 60 (env) | Keep watching this long for the stream to return after a file ends |
+| `MAX_RECORDING_MINUTES` | 240 (env) | Cap on a whole recording job |
 
 ### Utility scripts
 

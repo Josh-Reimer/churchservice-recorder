@@ -11,7 +11,7 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 import yaml
 from concurrent.futures import ThreadPoolExecutor
-from threading import Thread, Lock
+from threading import Thread, Lock, Event
 import atexit
 import psutil
 import queue
@@ -121,6 +121,17 @@ CHECK_TIMEOUT = 90 # minutes
 MAX_OFFLINE_POLLS = 3  # consecutive offline/error polls before treating stream as ended
 SERVICE_TRIGGER_WINDOW = timedelta(seconds=max(60, CHECK_INTERVAL * 2))
 
+# Many streams blip on for a few minutes before the service (or drop briefly
+# mid-service) and then come back. A stream that returns within
+# MERGE_GAP_MINUTES of going offline keeps recording into the same file; one
+# that returns later (but within REARM_MINUTES) gets a new file in the same
+# job. MAX_RECORDING_MINUTES caps a whole job so a stream left on all day
+# can't record for hours.
+MERGE_GAP_MINUTES = int(os.getenv("MERGE_GAP_MINUTES", "5"))
+REARM_MINUTES = int(os.getenv("REARM_MINUTES", "60"))
+MAX_RECORDING_MINUTES = int(os.getenv("MAX_RECORDING_MINUTES", "240"))
+TELEGRAM_MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # Bot API sendDocument limit
+
 # Whisper large-v3's resident footprint settles around ~6 GB on CPU (fp16
 # checkpoint upcast to fp32), but loading it transiently needs more than
 # that: a 7 GB threshold still got OOM-killed mid-load on a genuine 8 GB VM
@@ -133,11 +144,19 @@ MIN_TRANSCRIBE_RAM_GB = float(os.getenv("MIN_TRANSCRIBE_RAM_GB", "10"))
 RAM_RECHECK_INTERVAL_MINUTES = int(os.getenv("RAM_RECHECK_INTERVAL_MINUTES", "20"))
 
 # ffmpeg here just copies the stream (-c copy, no re-encode) so each job is
-# cheap, but 16 concurrent jobs was a fixed guess unrelated to the actual
-# host. Scale it to the CPU instead so weak hardware (e.g. an i3) isn't asked
-# to juggle more simultaneous recordings than it realistically can.
-MAX_CONCURRENT_RECORDINGS = int(os.getenv("MAX_CONCURRENT_RECORDINGS", str(max(2, os.cpu_count() or 4))))
+# cheap, and a job spends most of its life asleep waiting for the stream to
+# come online. Sizing the pool to the CPU count (4 on the production VM)
+# starved it: streams in several timezones trigger at the same container
+# time, jobs waiting on offline streams held every slot for up to 90 min,
+# and queued jobs started 15-45 min late. One slot per stream is the cap.
+MAX_CONCURRENT_RECORDINGS = int(os.getenv("MAX_CONCURRENT_RECORDINGS", "32"))
 _executor = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_RECORDINGS)
+
+# One recording job per stream URL at a time. A newer trigger asks the older
+# job to finish (via its stop event) and waits for it before starting.
+_stream_jobs_lock = Lock()
+_stream_locks = {}        # url -> Lock held for the life of a recording job
+_stream_stop_events = {}  # url -> Event of the job currently running
 
 def stream_available(status_url):
     """Check stream status from external API and print status."""
@@ -170,8 +189,23 @@ def notify_telegram(text: str):
 
 def notify_telegram_file(file_path: str, caption: str = ""):
     """Send a Telegram file if notifications are enabled."""
-    if TELEGRAM_ENABLED:
-        send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, file_path, caption=caption)
+    if not TELEGRAM_ENABLED:
+        return
+    try:
+        size = os.path.getsize(file_path)
+    except OSError:
+        size = 0
+    if size > TELEGRAM_MAX_UPLOAD_BYTES:
+        logger.info(f"Not uploading {file_path} to Telegram: {size / 1e6:.0f} MB is over the 50 MB bot limit.")
+        notify_telegram(f"{caption} ({size / 1e6:.0f} MB — too large to upload to Telegram)")
+        return
+    send_telegram_file(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, file_path, caption=caption)
+
+
+def _redact(text) -> str:
+    """Strip the bot token out of error text (requests errors include the URL)."""
+    text = str(text)
+    return text.replace(TELEGRAM_BOT_TOKEN, "<redacted>") if TELEGRAM_BOT_TOKEN else text
 
 
 def _available_ram_gb():
@@ -232,9 +266,11 @@ def send_telegram_message(bot_token: str, chat_id: str, text: str) -> dict:
             print("Telegram response:", response.text)
             logger.error(f"Telegram API said: {response.text}")
         except Exception:
-            logger.error(f"Telegram send failed (no response): {e}")
-            print(f"No response text from Telegram. Error: {e}")
-        raise
+            logger.error(f"Telegram send failed (no response): {_redact(e)}")
+            print(f"No response text from Telegram. Error: {_redact(e)}")
+        # Not re-raised: this runs in a bare Thread, where an uncaught
+        # exception prints a traceback (with the token in the URL) to stderr.
+        return {"ok": False, "error": _redact(e)}
 
 
 
@@ -265,8 +301,8 @@ def send_telegram_file(bot_token: str, chat_id: str, file_path: str, caption: st
         logger.error(f"File not found: {file_path}")
         return {"ok": False, "error": f"File not found: {file_path}"}
     except requests.RequestException as e:
-        logger.error(f"Error sending Telegram file: {e}")
-        return {"ok": False, "error": str(e)}
+        logger.error(f"Error sending Telegram file: {_redact(e)}")
+        return {"ok": False, "error": _redact(e)}
 
 #send_telegram_message(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, "Church Service Recorder started.")
 
@@ -283,10 +319,26 @@ def recording_timestamp():
     return now_local().strftime("%Y-%m-%d_%H-%M")
 
 
-def wait_for_stream_online(status_url, context_label):
-    """Wait for stream to come online, with timeout. Returns True if online, False if timeout."""
+def _sleep(seconds, stop_event=None):
+    """Sleep, waking early if stop_event is set."""
+    if stop_event is None:
+        time.sleep(seconds)
+    else:
+        stop_event.wait(seconds)
+
+
+def wait_for_stream_online(status_url, context_label, timeout_minutes=CHECK_TIMEOUT,
+                           notify_on_timeout=True, deadline=None, stop_event=None):
+    """Wait for stream to come online.
+
+    Returns True once online. Returns False after `timeout_minutes` of offline
+    polls (None = no limit), once the time.monotonic() `deadline` passes, or
+    when `stop_event` is set.
+    """
     offline_seconds = 0
     while True:
+        if stop_event is not None and stop_event.is_set():
+            return False
         available = stream_available(status_url)
         if available is True:
             return True
@@ -294,85 +346,257 @@ def wait_for_stream_online(status_url, context_label):
             offline_seconds += CHECK_INTERVAL
             print(f"[{now_local()}] Stream offline. Checking again in {CHECK_INTERVAL} seconds... ({context_label})")
             logger.info(f"Stream offline ({context_label}). Checking again in {CHECK_INTERVAL} seconds...")
-            if offline_seconds >= CHECK_TIMEOUT * 60:
-                print(f"[{now_local()}] Stream did not become available within {CHECK_TIMEOUT} minutes. Exiting ({context_label}).")
-                logger.warning(f"Stream did not become available within {CHECK_TIMEOUT} minutes ({context_label}). Exiting.")
-                notify_telegram(f"Stream did not become available within {CHECK_TIMEOUT} minutes ({context_label}). Exiting.")
+            if timeout_minutes is not None and offline_seconds >= timeout_minutes * 60:
+                print(f"[{now_local()}] Stream did not become available within {timeout_minutes} minutes. Exiting ({context_label}).")
+                logger.warning(f"Stream did not become available within {timeout_minutes} minutes ({context_label}). Exiting.")
+                if notify_on_timeout:
+                    notify_telegram(f"Stream did not become available within {timeout_minutes} minutes ({context_label}). Exiting.")
                 return False
         else:
             logger.warning(f"Status check failed for {status_url} ({context_label}), retrying in {CHECK_INTERVAL} seconds...")
-        time.sleep(CHECK_INTERVAL)
+        sleep_for = CHECK_INTERVAL
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            sleep_for = min(sleep_for, remaining)
+        _sleep(sleep_for, stop_event)
 
 
-def monitor_stream_while_recording(status_url, context_label):
-    """Monitor stream status while recording. Returns when stream becomes unavailable."""
+def watch_recording(process, status_url, deadline, stop_event):
+    """Watch a running ffmpeg until it should stop.
+
+    Returns (reason, offline_since). reason is "offline" (MAX_OFFLINE_POLLS
+    consecutive offline/error polls), "ffmpeg_exited" (ffmpeg died on its own,
+    e.g. the server dropped the connection while the status API still said
+    online), "capped" (job deadline reached) or "stopped" (a newer job for
+    this stream took over). offline_since is the time.monotonic() of the first
+    offline poll in the current streak, or None.
+    """
     consecutive_offline = 0
+    offline_since = None
     while True:
         available = stream_available(status_url)
         if available is True:
             consecutive_offline = 0
-        elif available is False or available is None:
+            offline_since = None
+        else:
             consecutive_offline += 1
+            if offline_since is None:
+                offline_since = time.monotonic()
             if consecutive_offline >= MAX_OFFLINE_POLLS:
+                return "offline", offline_since
+        # Wait for the next poll, but notice ffmpeg dying within a second.
+        next_poll = time.monotonic() + CHECK_INTERVAL
+        while time.monotonic() < next_poll:
+            if stop_event.is_set():
+                return "stopped", offline_since
+            if time.monotonic() >= deadline:
+                return "capped", offline_since
+            if process.poll() is not None:
+                return "ffmpeg_exited", offline_since
+            stop_event.wait(min(1, max(0, next_poll - time.monotonic())))
+
+
+def join_parts(output_file, parts):
+    """Join recording parts (in order) into output_file.
+
+    Returns the list of files to deliver: [output_file] normally, or the
+    separate parts if joining failed, so no audio is ever thrown away.
+    """
+    parts = [p for p in parts if os.path.exists(p) and os.path.getsize(p) > 0]
+    if not parts:
+        return []
+    if len(parts) == 1:
+        if parts[0] != output_file:
+            os.replace(parts[0], output_file)
+        return [output_file]
+
+    list_path = f"{output_file}.parts.txt"
+    joined = f"{os.path.splitext(output_file)[0]}.joined.mp3"
+    with open(list_path, "w") as f:
+        for p in parts:
+            f.write("file '" + os.path.abspath(p).replace("'", "'\\''") + "'\n")
+    cmd = [
+        "ffmpeg", "-y",
+        "-nostats", "-loglevel", "warning",
+        "-f", "concat", "-safe", "0",
+        "-i", list_path,
+        "-c", "copy",
+        joined,
+    ]
+    try:
+        result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600)
+        ok = result.returncode == 0 and os.path.exists(joined) and os.path.getsize(joined) > 0
+        error = result.stderr.strip()[-500:]
+    except Exception as e:
+        ok, error = False, str(e)
+    finally:
+        try:
+            os.remove(list_path)
+        except OSError:
+            pass
+
+    if not ok:
+        logger.error(f"Could not join {len(parts)} parts of {output_file} — keeping them as separate files: {error}")
+        if os.path.exists(joined):
+            os.remove(joined)
+        return parts
+
+    os.replace(joined, output_file)
+    for p in parts:
+        if p != output_file:
+            os.remove(p)
+    logger.info(f"Joined {len(parts)} parts into {output_file}.")
+    return [output_file]
+
+
+MAX_SHORT_PARTS = 10  # consecutive near-instant ffmpeg failures before giving up on a file
+
+
+def record_one_file(service_type, url, status_url, output_dir, transcription_dir, deadline, stop_event):
+    """Record one file, rejoining the stream if it returns within MERGE_GAP_MINUTES.
+
+    ffmpeg is restarted into a new part whenever it dies or the stream comes
+    back, and the parts are joined into one file at the end. Returns why the
+    file ended: "offline", "capped", "stopped" or "failed".
+    """
+    timestamp = recording_timestamp()
+    base = f"{output_dir}/recording_{timestamp}"
+    output_file = f"{base}.mp3"
+    parts = []
+    gap_start = None  # time.monotonic() the audio was lost, while trying to rejoin
+    short_parts = 0
+    outcome = None
+    while outcome is None:
+        part_base = base if not parts else f"{base}.part{len(parts) + 1}"
+        if not parts:
+            print(f"[{now_local()}] Stream online! Starting recording to {output_file}")
+            logger.info(f"Stream online! Starting recording to {output_file}")
+        else:
+            logger.info(f"Stream back — continuing {output_file} (part {len(parts) + 1}).")
+        try:
+            process = run_ffmpeg(service_type, url, part_base, "mp3")
+        except Exception as e:
+            logger.error(f"FAILED TO START RECORDING for {service_type} ({url}): {e}", exc_info=e)
+            print(f"[{now_local()}] ERROR: ffmpeg failed to start for {service_type} — recording aborted. See app.log for details.")
+            outcome = "failed"
+            break
+        parts.append(f"{part_base}.mp3")
+        started = time.monotonic()
+        if len(parts) == 1:
+            logger.info(f"Started ffmpeg process with PID {process.pid} for recording.")
+            notify_telegram(f"Recording started at {timestamp}.")
+
+        reason, offline_since = watch_recording(process, status_url, deadline, stop_event)
+        stop_process(process)
+        ran_for = time.monotonic() - started
+        if reason in ("capped", "stopped"):
+            outcome = reason
+            break
+        if reason == "ffmpeg_exited":
+            logger.warning(f"ffmpeg exited on its own after {ran_for / 60:.1f} min recording {output_file} (see its .ffmpeg.log).")
+
+        # A part that only lasted seconds didn't really get the stream back, so
+        # it doesn't restart the gap clock.
+        lost_at = offline_since or time.monotonic()
+        if ran_for >= 60:
+            short_parts = 0
+            gap_start = lost_at
+        else:
+            short_parts += 1
+            if gap_start is None:
+                gap_start = lost_at
+            if short_parts >= MAX_SHORT_PARTS:
+                logger.error(f"ffmpeg keeps exiting immediately for {output_file} — giving up on this recording.")
+                outcome = "failed"
                 break
-        time.sleep(CHECK_INTERVAL)
+        if ran_for < CHECK_INTERVAL:
+            _sleep(CHECK_INTERVAL - ran_for, stop_event)  # don't hammer the server
+
+        rejoin_by = min(deadline, gap_start + MERGE_GAP_MINUTES * 60)
+        if wait_for_stream_online(status_url, f"{service_type}_gap", timeout_minutes=None,
+                                  notify_on_timeout=False, deadline=rejoin_by, stop_event=stop_event):
+            continue
+        if stop_event.is_set():
+            outcome = "stopped"
+        elif time.monotonic() >= deadline:
+            outcome = "capped"
+        else:
+            outcome = "offline"
+
+    if parts:
+        print(f"[{now_local()}] Stream stopped. Ending recording.")
+        logger.info(f"Stream stopped. Ending recording of {output_file}.")
+        for f in join_parts(output_file, parts):
+            notify_telegram_file(f, caption=f"Recording finished: {f}")
+            queue_transcription(f, transcription_dir)
+    return outcome
 
 
 def record_stream(service_type, url, status_url, output_dir, transcription_dir, has_sunday_school=False):
-    """Record the stream until it becomes unavailable."""
+    """Record the stream until it becomes unavailable.
+
+    Only one job runs per stream: a newer trigger (e.g. the evening service
+    while the morning job is still going) asks the older job to finish its
+    current file, then waits for it.
+    """
+    stop_event = Event()
+    with _stream_jobs_lock:
+        previous = _stream_stop_events.get(url)
+        _stream_stop_events[url] = stop_event
+        stream_lock = _stream_locks.setdefault(url, Lock())
+    if previous is not None:
+        logger.warning(f"An earlier recording job for {output_dir} is still running — asking it to finish so {service_type} can start.")
+        previous.set()
+    with stream_lock:
+        try:
+            _record_stream_job(service_type, url, status_url, output_dir, transcription_dir, has_sunday_school, stop_event)
+        finally:
+            with _stream_jobs_lock:
+                if _stream_stop_events.get(url) is stop_event:
+                    del _stream_stop_events[url]
+
+
+def _record_stream_job(service_type, url, status_url, output_dir, transcription_dir, has_sunday_school, stop_event):
     print(f"[{now_local()}] Waiting for stream availability...")
     logger.info(f"Waiting for stream availability for {service_type}")
-    if not wait_for_stream_online(status_url, f"initial_{service_type}"):
+    if not wait_for_stream_online(status_url, f"initial_{service_type}", stop_event=stop_event):
         return
 
-    timestamp = recording_timestamp()
-    output_file = f"{output_dir}/recording_{timestamp}.mp3"
-    print(f"[{now_local()}] Stream online! Starting recording to {output_file}")
-    logger.info(f"Stream online! Starting recording to {output_file}")
-    try:
-        process_main = run_ffmpeg(service_type, url, os.path.splitext(output_file)[0], "mp3")
-    except Exception as e:
-        logger.error(f"FAILED TO START RECORDING for {service_type} ({url}): {e}", exc_info=e)
-        print(f"[{now_local()}] ERROR: ffmpeg failed to start for {service_type} — recording aborted. See app.log for details.")
-        return
-    logger.info(f"Started ffmpeg process with PID {process_main.pid} for recording.")
-    notify_telegram(f"Recording started at {timestamp}.")
-    # Monitor stream; stop when unavailable
-    monitor_stream_while_recording(status_url, f"{service_type}_recording")
-    print(f"[{now_local()}] Stream stopped. Ending recording.")
-    stop_process(process_main)
-
-    logger.info(f"Stream stopped. Ending recording of {output_file}.")
-    notify_telegram_file(output_file, caption=f"Recording finished: {output_file}")
-    queue_transcription(output_file, transcription_dir)
-
-    if has_sunday_school:
-        notify_telegram("Sunday morning recording finished. Starting next recording after sunday school")
-        if not wait_for_stream_online(status_url, "sunday_school_break"):
+    deadline = time.monotonic() + MAX_RECORDING_MINUTES * 60
+    files_recorded = 0
+    while True:
+        outcome = record_one_file(service_type, url, status_url, output_dir, transcription_dir, deadline, stop_event)
+        files_recorded += 1
+        if outcome == "capped":
+            logger.warning(f"{service_type} recording for {output_dir} hit the {MAX_RECORDING_MINUTES}-minute cap with the stream still online — stopping.")
+            notify_telegram(f"Recording stopped after {MAX_RECORDING_MINUTES} minutes ({output_dir}) — the stream was still online.")
+            return
+        if outcome != "offline":
             return
 
-        timestamp = recording_timestamp()
-        output_file = f"{output_dir}/recording_{timestamp}.mp3"
-        
-        try:
-            process_sunday_school = run_ffmpeg(service_type, url, os.path.splitext(output_file)[0], "mp3")
-        except Exception as e:
-            logger.error(f"FAILED TO START SUNDAY SCHOOL RECORDING for {service_type} ({url}): {e}", exc_info=e)
-            print(f"[{now_local()}] ERROR: ffmpeg failed to start for sunday school — recording aborted. See app.log for details.")
+        # The stream stayed off longer than MERGE_GAP_MINUTES. Streams often
+        # come back after a pre-service blip or a Sunday school break, so keep
+        # watching and record the return as a new file.
+        if has_sunday_school and files_recorded == 1:
+            notify_telegram("Sunday morning recording finished. Starting next recording after sunday school")
+            label, wait_minutes, notify = "sunday_school_break", CHECK_TIMEOUT, True
+        else:
+            label, wait_minutes, notify = f"{service_type}_rearm", REARM_MINUTES, False
+        if not wait_for_stream_online(status_url, label, timeout_minutes=wait_minutes,
+                                      notify_on_timeout=notify, deadline=deadline, stop_event=stop_event):
             return
-        logger.info(f"Started ffmpeg process with PID {process_sunday_school.pid} for recording.")
-        monitor_stream_while_recording(status_url, "sunday_school_recording")
-        print(f"[{now_local()}] Stream stopped. Ending recording.")
-        stop_process(process_sunday_school)
-        logger.info(f"Stream stopped. Ending recording of {output_file}.")
-        notify_telegram_file(output_file, caption=f"Recording finished: {output_file}")
-        queue_transcription(output_file, transcription_dir)
-    
+
+
 def run_ffmpeg(name, url, output_path, output_format="mp3"):
     """Run an FFmpeg process and return the process handle."""
     cmd = [
         "ffmpeg", "-y",
         "-nostats", "-loglevel", "warning",
+        # The server sometimes drops the connection mid-service ("Stream ends
+        # prematurely"); reconnect in-process instead of exiting.
+        "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "10",
         "-i", url,
         "-c", "copy",
         f"{output_path}.{output_format}"
