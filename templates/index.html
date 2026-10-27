@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <link rel="icon" href="appicon.png" type="image/png" />
+  <link rel="icon" href="{{ url_for('serve_icon') }}" type="image/png" />
   <title>ByteWorship Recordings</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -82,7 +82,7 @@
   <!-- App Icon Section -->
   <div class="flex justify-center mb-10 " style="text-align: center;">
     <img 
-      src="appicon.png" 
+      src="{{ url_for('serve_icon') }}" 
       alt="App Icon" 
       class="w-32 h-32 rounded-2xl shadow-lg object-cover" 
       style="border-radius:26px;"
@@ -93,23 +93,30 @@
   <h1 class="text-3xl text-center font-bold mb-6">ByteWorship Recordings</h1>
 
   <!-- Recordings List -->
-  <div class="max-w-3xl mx-auto space-y-6">
+  <div class="max-w-3xl mx-auto space-y-10">
    
-{% for file in files %}
-    <div class="bg-white/10 backdrop-blur-sm p-4 rounded-xl shadow-lg">
-      <h2 class="text-xl font-semibold mb-2">{{ file }}</h2>
-      <audio controls class="w-full mb-2">
-      <source src="{{ url_for('serve_recording', filename=file) }}" type="audio/mpeg" />
-      Your browser does not support the audio element.
-      </audio>
-      <div class="text-sm text-green-300 mb-2">Length: {{ audio_lengths[file]}}</div>
-      <details class="mt-2">
-      <summary class="cursor-pointer text-green-200 hover:underline">Show Transcription</summary>
-      <div class="mt-2 whitespace-pre-line text-green-100 text-sm">
-        {{ transcriptions[file] }}
+{% for group in groups %}
+    <section class="space-y-4">
+      <h2 class="text-2xl font-bold border-b border-green-700/50 pb-1">{{ group.title }}</h2>
+  {% for rec in group.recordings %}
+      <div class="bg-white/10 backdrop-blur-sm p-4 rounded-xl shadow-lg">
+        <h3 class="text-xl font-semibold mb-2">{{ rec.name }}</h3>
+        <audio controls preload="none" class="w-full mb-2">
+        <source src="{{ url_for('serve_recording', filename=rec.path) }}" type="audio/mpeg" />
+        Your browser does not support the audio element.
+        </audio>
+        <div class="text-sm text-green-300 mb-2">Length: {{ rec.length }}</div>
+        <details class="mt-2">
+        <summary class="cursor-pointer text-green-200 hover:underline">Show Transcription</summary>
+        <div class="mt-2 whitespace-pre-line text-green-100 text-sm">
+          {{ rec.transcription }}
+        </div>
+        </details>
       </div>
-      </details>
-    </div>
+  {% endfor %}
+    </section>
+{% else %}
+    <p class="text-center text-green-200">No recordings yet.</p>
 {% endfor %}
   </div>
 
@@ -157,12 +164,15 @@
     &copy; 2025 ByteWorship. All rights reserved.
   </footer>
   <div class="fixed bottom-4 right-4 flex gap-2">
-    <button class="bg-green-700 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition duration-300 ease-in-out">
-      <a href="{{ url_for('config_dashboard') }}">Config</a>
-    </button>
-    <button class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition duration-300 ease-in-out">
-      <a href="{{ url_for('logout') }}">Logout</a>
-    </button>
+  {% if logged_in %}
+    <a href="{{ url_for('config_dashboard') }}"
+      class="bg-green-700 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition duration-300 ease-in-out">Config</a>
+    <a href="{{ url_for('logout') }}"
+      class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition duration-300 ease-in-out">Logout</a>
+  {% else %}
+    <a href="{{ url_for('login') }}"
+      class="bg-green-700 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg shadow-lg transition duration-300 ease-in-out">Admin Login</a>
+  {% endif %}
   </div>
 </body>
 </html>

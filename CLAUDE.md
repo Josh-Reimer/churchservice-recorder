@@ -22,8 +22,9 @@ python download_model.py
 export DOCKER_BUILDKIT=1
 docker compose up -d --build
 
-# 3. Access the web UI: http://0.0.0.0:5003
-# Login: admin / 42
+# 3. Access the web UI: http://0.0.0.0:5003 (recordings are public)
+# Admin login for /config: run `python set_admin_password.py`, paste its
+# output into .env, then restart the webserver. No hash = admin login disabled.
 ```
 
 **Note:** Default build uses CPU-only PyTorch (~130 MB wheels) to prevent OOM crashes on 8 GB systems. Whisper transcription still works fine on CPU (30-45 min recordings take 30-90 min to transcribe in background). See `TORCH_CPU_VS_CUDA.md` if you want CUDA/GPU support instead.
@@ -117,11 +118,15 @@ Whisper `large-v3`'s resident footprint settles around ~6 GB on CPU (fp16 checkp
 
 ### `webserver.py` — Flask UI
 
-Session-based login (`admin`/`42`, hardcoded). CSRF via `flask-wtf`.
+The recordings page and audio files are public; only the config editor needs a login. CSRF via `flask-wtf`.
+
+Admin login: `ADMIN_USERNAME` + `ADMIN_PASSWORD_HASH` (werkzeug scrypt hash, from `set_admin_password.py`, single-quoted in `.env` because it contains `$`). Without a hash, `/login` returns 503 and the editor is unreachable. `FLASK_SECRET_KEY` signs sessions (random per-process if unset, so restarts log you out). Sessions are re-issued on login, HttpOnly/SameSite=Lax, last `SESSION_LIFETIME_HOURS` (12), and are `Secure` unless `SESSION_COOKIE_SECURE=0` (needed to log in over plain http on the LAN). `MAX_LOGIN_ATTEMPTS` (5) failures per client IP locks it out for `LOGIN_LOCKOUT_MINUTES` (15), in memory. The client IP comes from Cloudflare's `CF-Connecting-IP` only when the request's socket address is in `TRUSTED_PROXY_IPS` (cloudflared on ubuntuserver: `192.168.0.20,100.78.23.97`); direct Tailscale/LAN requests use their real address, so the header can't be spoofed to dodge the lockout. Change the password by re-running `set_admin_password.py`, replacing `ADMIN_PASSWORD_HASH` in `.env`, and `docker compose up -d webserver` (keep `FLASK_SECRET_KEY` unless you also want to sign out every session).
 
 | Route | Purpose |
 |-------|---------|
-| `/index` | Recordings list with audio player and transcriptions |
+| `/`, `/index` | Public recordings list, grouped by stream, newest first |
+| `/recordings/<path>` | Public MP3 download (`<stream_dir>/<file>.mp3`) |
+| `/login` | Admin sign-in |
 | `/config` | Stream config dashboard |
 | `/config/stream/add` | POST: add stream |
 | `/config/stream/<idx>/edit` | POST: replace stream entry |

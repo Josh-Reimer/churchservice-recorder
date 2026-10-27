@@ -63,8 +63,13 @@ services:
     environment:
       - TZ=${TZ:-UTC}
       - PYTHONPATH=/app
-
-      - USERNAME=${USERNAME:-admin}
+      # Admin login for the config editor — see `python set_admin_password.py`
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-}
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-1}
+      # cloudflared (ubuntuserver) LAN + Tailscale addresses — only these may set CF-Connecting-IP
+      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-192.168.0.20,100.78.23.97}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5003/health"]
       interval: 30s

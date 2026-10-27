@@ -3,61 +3,176 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Sign in</title>
-  <link rel="icon" href="{{ url_for('serve_icon') }}">
+  <meta name="robots" content="noindex" />
+  <title>Admin Sign In · ByteWorship</title>
+  <link rel="icon" href="{{ url_for('serve_icon') }}" type="image/png">
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #10291a; color: #e6f9e8; }
-    .wrap { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
-    form { background: #183c26; padding: 24px; border-radius: 16px; width: 100%; max-width: 360px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
-    h1 { margin: 0 0 16px; font-size: 20px; }
-    label { display: block; margin: 12px 0 6px; font-size: 12px; opacity: .8; }
-    input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #295c3a; background: #153221; color: #e6f9e8; }
-    button { width: 100%; margin-top: 16px; padding: 10px 12px; border: 0; border-radius: 10px; background: #3ecf4a; color: white; font-weight: 600; cursor: pointer; }
-    .flash { margin-bottom: 10px; padding: 10px 12px; border-radius: 10px; }
-    .flash.error { background: #2a3a1a; color: #ffeaea; border: 1px solid #7a8a21; }
-    .flash.success { background: #163a1f; color: #c8ffd7; border: 1px solid #1c7a3a; }
-     .wrap {
-    display: flex;
-    justify-content: center; /* horizontal center */
-    align-items: center;     /* vertical center if you set a height */
-    flex-direction: column;
-    min-height: 100vh;       /* optional, centers in viewport */
-  }
-
-  form {
-    display: flex;
-    flex-direction: column;
-    align-items: center;     /* center inputs inside form */
-    gap: 10px;               /* optional spacing between inputs */
-  }
-
-  input {
-    text-align: center;      /* optional: centers text inside inputs */
-  }
+    :root {
+      --bg: #051408;
+      --card: rgba(255, 255, 255, 0.07);
+      --border: #295c3a;
+      --input: #0d2414;
+      --text: #e6f9e8;
+      --muted: #9cc7a4;
+      --accent: #2f9e3a;
+      --accent-hover: #3ecf4a;
+      --error-bg: #3a1414;
+      --error-border: #a33a3a;
+      --error-text: #ffd9d9;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #e7f5e7;
+        --card: rgba(255, 255, 255, 0.75);
+        --border: #a9d3b0;
+        --input: #ffffff;
+        --text: #1a2e1a;
+        --muted: #4d6b52;
+        --accent: #1f7a2a;
+        --accent-hover: #2a9636;
+        --error-bg: #fde8e8;
+        --error-border: #e0a3a3;
+        --error-text: #7a1c1c;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      font-family: 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .card {
+      width: 100%;
+      max-width: 380px;
+      padding: 32px 28px 24px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.3);
+      backdrop-filter: blur(6px);
+    }
+    .brand { text-align: center; margin-bottom: 20px; }
+    .brand img { width: 64px; height: 64px; border-radius: 16px; object-fit: cover; }
+    h1 { margin: 12px 0 4px; font-size: 22px; }
+    .sub { margin: 0; font-size: 14px; color: var(--muted); }
+    .flash {
+      margin: 0 0 16px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 14px;
+      background: var(--error-bg);
+      border: 1px solid var(--error-border);
+      color: var(--error-text);
+    }
+    label { display: block; margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
+    .field { position: relative; }
+    input {
+      width: 100%;
+      padding: 11px 12px;
+      font-size: 16px; /* 16px stops iOS zooming on focus */
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--input);
+      color: var(--text);
+    }
+    input:focus { outline: 2px solid var(--accent-hover); outline-offset: 1px; }
+    #password { padding-right: 64px; }
+    .toggle {
+      position: absolute;
+      right: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      padding: 6px 8px;
+      font-size: 12px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .toggle:hover { color: var(--text); }
+    .submit {
+      width: 100%;
+      margin-top: 22px;
+      padding: 12px;
+      font-size: 15px;
+      font-weight: 700;
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .submit:hover { background: var(--accent-hover); }
+    .submit:disabled { opacity: 0.6; cursor: wait; }
+    .back { display: block; margin-top: 18px; text-align: center; font-size: 14px; color: var(--muted); }
+    .back:hover { color: var(--text); }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <form method="post" action="{{ url_for('login') }}" autocomplete="off">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
-      <h1>Sign in</h1>
+  <main class="card">
+    <div class="brand">
+      <img src="{{ url_for('serve_icon') }}" alt="" />
+      <h1>Admin sign in</h1>
+      <p class="sub">Manage streams and recording schedules</p>
+    </div>
 
+    {% if disabled %}
+      <div class="flash" role="alert">
+        Admin login isn't configured on this server. Set <code>ADMIN_PASSWORD_HASH</code> in <code>.env</code>
+        (run <code>python set_admin_password.py</code>) and restart the webserver.
+      </div>
+    {% else %}
       {% with messages = get_flashed_messages(with_categories=true) %}
-        {% if messages %}
-          {% for category, msg in messages %}
-            <div class="flash {{ category }}">{{ msg }}</div>
-          {% endfor %}
-        {% endif %}
+        {% for category, msg in messages %}
+          <div class="flash {{ category }}" role="alert">{{ msg }}</div>
+        {% endfor %}
       {% endwith %}
 
-      <label for="username">Username</label>
-      <input id="username" name="username" type="text" required>
+      <form method="post" action="{{ url_for('login') }}" id="login-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"/>
 
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" required>
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" value="{{ username or '' }}"
+               autocomplete="username" autocapitalize="none" spellcheck="false" required
+               {% if not username %}autofocus{% endif %}>
 
-      <button type="submit">Log in</button>
-    </form>
-  </div>
+        <label for="password">Password</label>
+        <div class="field">
+          <input id="password" name="password" type="password" autocomplete="current-password" required
+                 {% if username %}autofocus{% endif %}>
+          <button type="button" class="toggle" id="toggle-password" aria-controls="password" aria-pressed="false">Show</button>
+        </div>
+
+        <button type="submit" class="submit" id="submit">Sign in</button>
+      </form>
+    {% endif %}
+
+    <a class="back" href="{{ url_for('index') }}">&larr; Back to recordings</a>
+  </main>
+
+  <script>
+    const toggle = document.getElementById("toggle-password");
+    if (toggle) {
+      const pw = document.getElementById("password");
+      toggle.addEventListener("click", () => {
+        const show = pw.type === "password";
+        pw.type = show ? "text" : "password";
+        toggle.textContent = show ? "Hide" : "Show";
+        toggle.setAttribute("aria-pressed", String(show));
+      });
+      // Stop double-submits counting as two failed attempts.
+      document.getElementById("login-form").addEventListener("submit", () => {
+        document.getElementById("submit").disabled = true;
+      });
+    }
+  </script>
 </body>
 </html>

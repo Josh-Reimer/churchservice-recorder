@@ -88,7 +88,7 @@ USER app
 # Copy application code (changes frequently — after deps so code edits don't
 # bust the pip layer, which is now in the venv from builder)
 COPY --chown=app:app new_recorder.py .
-COPY --chown=app:app webserver.py .
+COPY --chown=app:app webserver.py set_admin_password.py ./
 COPY --chown=app:app templates templates
 COPY --chown=app:app appicon.png .
 COPY --chown=app:app config config
