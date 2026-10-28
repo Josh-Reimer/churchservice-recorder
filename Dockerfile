@@ -42,6 +42,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install \
     flask \
     flask-wtf \
+    gunicorn \
     mutagen \
     aiohttp==3.9.1 \
     tzlocal==5.2

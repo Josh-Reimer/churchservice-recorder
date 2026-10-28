@@ -55,7 +55,15 @@ services:
     restart: unless-stopped
     ports:
       - "5003:5003"  # Expose port 5000 for the web server
-    command: python3 webserver.py
+    # One worker process on purpose: the admin login lockout is kept in memory,
+    # so extra processes would each get their own attempt count. Threads handle
+    # concurrent listeners (audio downloads are I/O-bound).
+    command: >
+      gunicorn webserver:app
+      --bind 0.0.0.0:5003
+      --worker-class gthread --workers 1 --threads 8
+      --timeout 120
+      --access-logfile - --error-logfile -
     volumes:
       - ./recordings:/app/recordings:rw
       - ./transcriptions:/app/transcriptions:rw

@@ -7,6 +7,7 @@ tzlocal==5.2
 pytz==2023.3
 openai-whisper
 flask
+gunicorn
 mutagen
 flask-wtf
 pyyaml
