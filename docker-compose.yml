@@ -76,8 +76,8 @@ services:
       - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-}
       - FLASK_SECRET_KEY=${FLASK_SECRET_KEY:-}
       - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-1}
-      # cloudflared (ubuntuserver) LAN + Tailscale addresses — only these may set CF-Connecting-IP
-      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-192.168.0.20,100.78.23.97}
+      # cloudflared connector for churchrecordings.bibleapp.ca (bibleapp-server, LAN + Tailscale) — only these may set CF-Connecting-IP
+      - TRUSTED_PROXY_IPS=${TRUSTED_PROXY_IPS:-192.168.0.50,100.111.158.82}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5003/health"]
       interval: 30s
