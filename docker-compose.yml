@@ -68,6 +68,7 @@ services:
       - ./recordings:/app/recordings:rw
       - ./transcriptions:/app/transcriptions:rw
       - ./config:/app/config:rw
+      - ./logs:/app/logs:rw  # webserver.log for IP logging + fail2ban (read by host)
     environment:
       - TZ=${TZ:-UTC}
       - PYTHONPATH=/app

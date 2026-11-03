@@ -3,6 +3,7 @@ from flask_wtf.csrf import CSRFProtect
 from werkzeug.security import check_password_hash
 import hmac
 import ipaddress
+import logging
 import os
 import secrets
 import threading
@@ -10,6 +11,7 @@ import time
 import yaml
 import pytz
 import mutagen
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, timedelta
 from mutagen.mp3 import MP3
 
@@ -30,6 +32,36 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "1") == "1",
     PERMANENT_SESSION_LIFETIME=timedelta(hours=int(os.getenv("SESSION_LIFETIME_HOURS", "12"))),
 )
+
+# ---------------------------------------------------------------------------
+# Request + auth logging for IP tracking and fail2ban.
+#
+# Lines look like:
+#   2026-11-01 22:13:45,678 WARNING AUTH FAILED user='admin' ip=203.0.113.5
+#   2026-11-01 22:13:46,001 INFO ACCESS ip=203.0.113.5 method=GET path=/ status=200 ua='curl/8'
+#
+# ip= is always the *real* client IP (CF-Connecting-IP when the request comes
+# from a trusted proxy — see _client_ip), so fail2ban can match the actual
+# visitor and ban them at the Cloudflare edge. The file lives on the mounted
+# ./logs volume so it persists across container rebuilds and is readable by
+# fail2ban on the host.
+# ---------------------------------------------------------------------------
+wlog = logging.getLogger("webserver")
+wlog.setLevel(logging.INFO)
+wlog.propagate = False
+_log_fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+# Always log to stdout so `docker logs church-webserver` still shows events.
+_stream_h = logging.StreamHandler()
+_stream_h.setFormatter(_log_fmt)
+wlog.addHandler(_stream_h)
+# Also log to a rotating file on the mounted ./logs volume for fail2ban.
+_log_file = os.getenv("WEBSERVER_LOG_FILE", "/app/logs/webserver.log")
+try:
+    _file_h = RotatingFileHandler(_log_file, maxBytes=5_000_000, backupCount=5)
+    _file_h.setFormatter(_log_fmt)
+    wlog.addHandler(_file_h)
+except OSError as e:
+    wlog.warning("could not open log file %s: %s (file logging disabled)", _log_file, e)
 
 # Enable CSRF protection
 csrf = CSRFProtect(app)
@@ -247,6 +279,25 @@ def _client_ip():
             return forwarded
     return remote
 
+@app.after_request
+def _log_access(response):
+    """Log every request with the real client IP, for visitor-IP tracking.
+
+    Skips the container healthcheck (/health) so it doesn't drown the log.
+    Never let a logging error break the response.
+    """
+    try:
+        if request.path != "/health":
+            wlog.info(
+                "ACCESS ip=%s method=%s path=%s status=%s ua=%r",
+                _client_ip(), request.method, request.path,
+                response.status_code,
+                request.headers.get("User-Agent", "")[:200],
+            )
+    except Exception:
+        pass
+    return response
+
 def _lockout_remaining(ip):
     """Seconds left on this IP's lockout, or 0 if it may try to log in."""
     now = time.time()
@@ -265,7 +316,7 @@ def _record_login_failure(ip):
         if len(recent) >= MAX_LOGIN_ATTEMPTS:
             _login_locked_until[ip] = now + LOGIN_WINDOW_SECONDS
             _login_failures.pop(ip, None)
-            print(f"WARNING: locking out {ip} after {len(recent)} failed admin logins.")
+            wlog.warning("AUTH LOCKOUT ip=%s after %d failed admin logins", ip, len(recent))
         else:
             _login_failures[ip] = recent
         # Drop stale entries so the tables can't grow without bound.
@@ -297,6 +348,7 @@ def login():
     ip = _client_ip()
     remaining = _lockout_remaining(ip)
     if remaining:
+        wlog.warning("AUTH BLOCKED ip=%s (locked out, %ds remaining)", ip, remaining)
         flash(f"Too many failed attempts. Try again in {_minutes(remaining)} min.", "error")
         return render_template("login.html"), 429
 
@@ -309,9 +361,11 @@ def login():
         session.clear()
         session.permanent = True
         session["logged_in"] = True
+        wlog.info("AUTH OK user=%r ip=%s", username, ip)
         return redirect(url_for("config_dashboard"))
 
     _record_login_failure(ip)
+    wlog.warning("AUTH FAILED user=%r ip=%s", username, ip)
     remaining = _lockout_remaining(ip)
     if remaining:
         flash(f"Too many failed attempts. Try again in {_minutes(remaining)} min.", "error")
